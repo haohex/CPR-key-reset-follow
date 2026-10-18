@@ -1,3 +1,4 @@
+//! 周期清零及后续发送在故障、并发和重启下的恢复测试
 use gateway_plugin_sdk::{
     PluginFault,
     call::{
@@ -17,6 +18,10 @@ struct Storage {
     state: State,
     version: u64,
     resets: Vec<String>,
+    probes: Vec<String>,
+    mails: Vec<String>,
+    fail_probe: bool,
+    fail_mail: bool,
     refreshes: usize,
     time: i64,
     reset_at: i64,
@@ -41,6 +46,35 @@ impl Fake {
     }
 }
 impl Host for Fake {
+    async fn probe(&self, key: &str, _account: &str) -> Result<(), PluginFault> {
+        let mut s = self.0.lock().unwrap();
+        assert_eq!(
+            s.state.links[key].deliveries.last().unwrap().probe,
+            key_reset_follow::model::SendStatus::Unknown
+        );
+        s.probes.push(key.into());
+        if s.fail_probe {
+            Err(fault("response lost"))
+        } else {
+            Ok(())
+        }
+    }
+    async fn email(
+        &self,
+        _settings: &key_reset_follow::model::SmtpSettings,
+        recipient: &str,
+        body: &str,
+    ) -> Result<(), PluginFault> {
+        assert!(body.contains("周额度已重置"));
+        let mut s = self.0.lock().unwrap();
+        s.mails.push(recipient.into());
+        if s.fail_mail {
+            Err(fault("mail response lost"))
+        } else {
+            Ok(())
+        }
+    }
+
     async fn load(&self) -> Result<(State, Option<u64>), PluginFault> {
         let s = self.0.lock().unwrap();
         Ok((s.state.clone(), (s.version > 0).then_some(s.version)))
@@ -708,4 +742,191 @@ async fn new_and_resumed_links_wait_for_a_floating_window_to_settle() {
     let s = h.0.lock().unwrap();
     assert!(s.resets.is_empty());
     assert!(s.state.links["key-a"].pending.is_none());
+}
+
+#[tokio::test]
+async fn post_reset_delivery_is_persisted_and_unknown_probe_does_not_repeat() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    setup(&h).await;
+    {
+        let mut e = Engine::load(&h).await.unwrap();
+        e.state.probe_enabled = true;
+        e.state.smtp.enabled = true;
+        for link in e.state.links.values_mut() {
+            link.recipient = "synthetic@example.com".into();
+        }
+        e.save().await.unwrap();
+        e.deliver_one().await.unwrap();
+    }
+    assert!(h.0.lock().unwrap().probes.is_empty());
+    next(&h);
+    h.0.lock().unwrap().fail_probe = true;
+    Engine::load(&h)
+        .await
+        .unwrap()
+        .check("account-a", WEEK + 1000)
+        .await
+        .unwrap();
+    for _ in 0..6 {
+        Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+    }
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.probes.len(), 2);
+    assert_eq!(s.mails.len(), 2);
+    assert_eq!(s.resets.len(), 2);
+    assert_eq!(
+        s.state.links["key-a"].deliveries[0].probe,
+        SendStatus::Unknown
+    );
+    assert_eq!(
+        s.state.links["key-a"].deliveries[0].mail,
+        SendStatus::Succeeded
+    );
+}
+#[tokio::test]
+async fn paused_and_disabled_deliveries_wait_and_retry_requires_acknowledgement() {
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.probe_enabled = true;
+    e.save().await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    e.state.probe_enabled = false;
+    e.save().await.unwrap();
+    e.deliver_one().await.unwrap();
+    assert!(h.0.lock().unwrap().probes.is_empty());
+    e.state.probe_enabled = true;
+    for l in e.state.links.values_mut() {
+        l.paused = true;
+    }
+    e.save().await.unwrap();
+    e.deliver_one().await.unwrap();
+    assert!(h.0.lock().unwrap().probes.is_empty());
+    assert!(e.retry_delivery("key-a", 1, true, false).await.is_err());
+}
+#[test]
+fn legacy_settings_default_to_no_sending() {
+    let state: State =
+        serde_json::from_value(serde_json::json!({"early_auto":true,"links":{},"accounts":{}}))
+            .unwrap();
+    assert!(!state.probe_enabled && !state.smtp.enabled);
+}
+
+#[tokio::test]
+async fn disabling_probe_does_not_block_independent_email() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.probe_enabled = true;
+    e.state.smtp.enabled = true;
+    e.state.links.get_mut("key-a").unwrap().recipient = "synthetic@example.com".into();
+    e.save().await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    e.state.probe_enabled = false;
+    e.save().await.unwrap();
+    e.deliver_one().await.unwrap();
+    let s = h.0.lock().unwrap();
+    assert!(s.probes.is_empty());
+    assert_eq!(s.mails, ["synthetic@example.com"]);
+    assert_eq!(
+        s.state.links["key-a"].deliveries[0].probe,
+        SendStatus::Skipped
+    );
+}
+
+#[tokio::test]
+async fn lost_delivery_completion_write_does_not_replay_model_call() {
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.probe_enabled = true;
+    e.save().await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 2);
+    }
+    assert!(e.deliver_one().await.is_err());
+    h.0.lock().unwrap().fail_save_at = None;
+    for _ in 0..3 {
+        Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+    }
+    assert_eq!(h.0.lock().unwrap().probes, ["key-a", "key-b"]);
+}
+
+#[tokio::test]
+async fn unknown_reset_never_creates_delivery() {
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.probe_enabled = true;
+    e.save().await.unwrap();
+    next(&h);
+    h.0.lock().unwrap().lost_response = Some("key-b".into());
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    assert!(e.state.links["key-b"].deliveries.is_empty());
+    assert_eq!(e.state.links["key-a"].deliveries.len(), 1);
+}
+
+#[tokio::test]
+async fn unknown_mail_is_not_repeated_and_explicit_retry_only_resends_selected_mail() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.smtp.enabled = true;
+    e.state.links.get_mut("key-a").unwrap().recipient = "a@example.com".into();
+    e.state.links.get_mut("key-b").unwrap().recipient = "b@example.com".into();
+    e.save().await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    h.0.lock().unwrap().fail_mail = true;
+    for _ in 0..4 {
+        Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+    }
+    assert_eq!(h.0.lock().unwrap().mails.len(), 2);
+    h.0.lock().unwrap().fail_mail = false;
+    let mut e = Engine::load(&h).await.unwrap();
+    assert!(e.retry_delivery("key-a", 1, false, false).await.is_err());
+    e.retry_delivery("key-a", 1, false, true).await.unwrap();
+    e.deliver_one().await.unwrap();
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.mails, ["a@example.com", "b@example.com", "a@example.com"]);
+    assert!(s.probes.is_empty());
+    assert_eq!(s.resets.len(), 2);
+    assert_eq!(
+        s.state.links["key-a"].deliveries[0].mail,
+        SendStatus::Succeeded
+    );
+    assert_eq!(
+        s.state.links["key-b"].deliveries[0].mail,
+        SendStatus::Unknown
+    );
+}
+
+#[tokio::test]
+async fn lost_mail_completion_write_does_not_replay_smtp_send() {
+    let h = Fake::new();
+    setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.state.smtp.enabled = true;
+    e.state.links.get_mut("key-a").unwrap().recipient = "a@example.com".into();
+    e.save().await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 2);
+    }
+    assert!(e.deliver_one().await.is_err());
+    h.0.lock().unwrap().fail_save_at = None;
+    for _ in 0..3 {
+        Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+    }
+    assert_eq!(h.0.lock().unwrap().mails, ["a@example.com"]);
 }

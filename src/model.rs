@@ -1,3 +1,4 @@
+//! 关联、周期与发送任务的持久状态
 use crate::cycle::{Decision, Sample};
 use gateway_plugin_sdk::call::key_budgets::KeyBudget;
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,10 @@ pub enum Pending {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Link {
+    #[serde(default)]
+    pub recipient: String,
+    #[serde(default)]
+    pub deliveries: Vec<Delivery>,
     pub key_id: String,
     pub account_id: String,
     pub baseline: Sample,
@@ -74,6 +79,10 @@ pub struct Account {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct State {
+    #[serde(default)]
+    pub probe_enabled: bool,
+    #[serde(default)]
+    pub smtp: SmtpSettings,
     pub early_auto: bool,
     #[serde(default)]
     pub display_timezone: DisplayTimezone,
@@ -83,6 +92,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            probe_enabled: false,
+            smtp: SmtpSettings::default(),
             early_auto: true,
             display_timezone: DisplayTimezone::default(),
             links: BTreeMap::new(),
@@ -100,4 +111,51 @@ pub enum DisplayTimezone {
     Shanghai,
     #[serde(rename = "UTC")]
     Utc,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SmtpSettings {
+    pub enabled: bool,
+    pub server: String,
+    pub port: u16,
+    pub security: SmtpSecurity,
+    pub username: String,
+    pub password: String,
+    pub from: String,
+}
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmtpSecurity {
+    Tls,
+    #[default]
+    Starttls,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendStatus {
+    Skipped,
+    Queued,
+    Unknown,
+    Succeeded,
+    Failed,
+}
+impl SendStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Skipped => "未启用",
+            Self::Queued => "等待发送",
+            Self::Unknown => "结果未知，可能已发送",
+            Self::Succeeded => "成功",
+            Self::Failed => "失败",
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Delivery {
+    pub id: u64,
+    pub reset_at: i64,
+    pub recipient: String,
+    pub probe: SendStatus,
+    pub mail: SendStatus,
 }

@@ -1,7 +1,8 @@
+//! 周期检查、不可逆清零及后续任务的持久化编排
 use crate::{
     cycle::{self, Decision, Sample},
     host::{Host, fault},
-    model::{Link, Pending, Phase, State},
+    model::{Delivery, Link, Pending, Phase, SendStatus, State},
 };
 use gateway_plugin_sdk::PluginFault;
 
@@ -45,6 +46,8 @@ impl<'a, H: Host> Engine<'a, H> {
         self.state.links.insert(
             key.into(),
             Link {
+                recipient: String::new(),
+                deliveries: vec![],
                 key_id: key.into(),
                 account_id: account.into(),
                 baseline,
@@ -236,6 +239,51 @@ impl<'a, H: Host> Engine<'a, H> {
         });
         self.save().await?;
         let result = self.host.reset(key).await;
+        while self
+            .state
+            .links
+            .values()
+            .map(|l| l.deliveries.len())
+            .sum::<usize>()
+            >= 128
+        {
+            let oldest = self
+                .state
+                .links
+                .iter()
+                .flat_map(|(key, l)| {
+                    l.deliveries
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, d)| {
+                            !matches!(
+                                d.probe,
+                                SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                            ) && !matches!(
+                                d.mail,
+                                SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                            )
+                        })
+                        .map(move |(i, d)| (d.reset_at, key.clone(), i))
+                })
+                .min();
+            let Some((_, old_key, i)) = oldest else {
+                break;
+            };
+            self.state
+                .links
+                .get_mut(&old_key)
+                .unwrap()
+                .deliveries
+                .remove(i);
+        }
+        let deliveries_full = self
+            .state
+            .links
+            .values()
+            .map(|l| l.deliveries.len())
+            .sum::<usize>()
+            >= 128;
         let link = self.state.links.get_mut(key).unwrap();
         match result {
             Ok(()) => {
@@ -243,6 +291,63 @@ impl<'a, H: Host> Engine<'a, H> {
                 link.phase = Phase::default();
                 link.pending = None;
                 link.event(now, reason);
+                let id = link
+                    .deliveries
+                    .iter()
+                    .map(|d| d.id)
+                    .max()
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                // 完成记录只保留最近十条，未确认任务不丢弃；积压满时跳过新增通知
+                let mut completed = link
+                    .deliveries
+                    .iter()
+                    .filter(|d| {
+                        !matches!(
+                            d.probe,
+                            SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                        ) && !matches!(
+                            d.mail,
+                            SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                        )
+                    })
+                    .count();
+                link.deliveries.retain(|d| {
+                    if completed > 10
+                        && !matches!(
+                            d.probe,
+                            SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                        )
+                        && !matches!(
+                            d.mail,
+                            SendStatus::Queued | SendStatus::Unknown | SendStatus::Failed
+                        )
+                    {
+                        completed -= 1;
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if link.deliveries.len() < 32 && !deliveries_full {
+                    link.deliveries.push(Delivery {
+                        id,
+                        reset_at: now,
+                        recipient: link.recipient.clone(),
+                        probe: if self.state.probe_enabled {
+                            SendStatus::Queued
+                        } else {
+                            SendStatus::Skipped
+                        },
+                        mail: if self.state.smtp.enabled && !link.recipient.is_empty() {
+                            SendStatus::Queued
+                        } else {
+                            SendStatus::Skipped
+                        },
+                    });
+                } else {
+                    link.event(now, "后续任务积压已满，本次未排队测试与邮件");
+                }
             }
             Err(e) => {
                 if let Some(Pending::Unknown { error, .. }) = &mut link.pending {
@@ -251,6 +356,113 @@ impl<'a, H: Host> Engine<'a, H> {
                 link.event(now, "结果未知，已停止自动重试");
             }
         }
+        self.save().await
+    }
+    // 每次维护最多执行一个外部发送，先保存 Unknown，重启后不会盲目重发
+    pub async fn deliver_one(&mut self) -> Result<(), PluginFault> {
+        let next = self
+            .state
+            .links
+            .iter()
+            .filter(|(_, l)| !l.paused)
+            .find_map(|(key, l)| {
+                l.deliveries
+                    .iter()
+                    .position(|d| {
+                        (d.probe == SendStatus::Queued && self.state.probe_enabled)
+                            || ((d.probe != SendStatus::Queued || !self.state.probe_enabled)
+                                && d.mail == SendStatus::Queued
+                                && self.state.smtp.enabled)
+                    })
+                    .map(|i| (key.clone(), i, l.account_id.clone()))
+            });
+        let Some((key, i, account)) = next else {
+            return Ok(());
+        };
+        if !self.state.probe_enabled
+            && self.state.links[&key].deliveries[i].probe == SendStatus::Queued
+        {
+            self.state.links.get_mut(&key).unwrap().deliveries[i].probe = SendStatus::Skipped;
+        }
+        let probe = self.state.probe_enabled
+            && self.state.links[&key].deliveries[i].probe == SendStatus::Queued;
+        if probe && !self.state.probe_enabled || !probe && !self.state.smtp.enabled {
+            return Ok(());
+        }
+        let job = self.state.links[&key].deliveries[i].clone();
+        let status = if probe {
+            &mut self.state.links.get_mut(&key).unwrap().deliveries[i].probe
+        } else {
+            &mut self.state.links.get_mut(&key).unwrap().deliveries[i].mail
+        };
+        *status = SendStatus::Unknown;
+        self.save().await?;
+        let result = if probe {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                self.host.probe(&key, &account),
+            )
+            .await
+        } else {
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                let name = self
+                    .host
+                    .key_name(&key)
+                    .await
+                    .unwrap_or_else(|_| "关联 Key".into());
+                let reset_time =
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(job.reset_at)
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .unwrap_or_else(|| "时间不可用".into());
+                let body = format!(
+                    "Key：{name}\n周额度已重置\n重置时间：{reset_time}\n模型测试：{}\n",
+                    job.probe.label()
+                );
+                self.host
+                    .email(&self.state.smtp, &job.recipient, &body)
+                    .await
+            })
+            .await
+        };
+        // 超时与外部错误都不能证明未发送，保留未知，管理员显式确认后才能重试
+        if matches!(result, Ok(Ok(()))) {
+            let d = &mut self.state.links.get_mut(&key).unwrap().deliveries[i];
+            if probe {
+                d.probe = SendStatus::Succeeded;
+            } else {
+                d.mail = SendStatus::Succeeded;
+            }
+        }
+        self.save().await
+    }
+    pub async fn retry_delivery(
+        &mut self,
+        key: &str,
+        id: u64,
+        probe: bool,
+        acknowledge: bool,
+    ) -> Result<(), PluginFault> {
+        if !acknowledge {
+            return Err(fault("请确认重试可能产生重复请求或重复邮件"));
+        }
+        let link = self
+            .state
+            .links
+            .get_mut(key)
+            .ok_or_else(|| fault("关联不存在"))?;
+        if link.paused {
+            return Err(fault("关联已暂停"));
+        }
+        let job = link
+            .deliveries
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| fault("发送记录不存在"))?;
+        let status = if probe { &mut job.probe } else { &mut job.mail };
+        if !matches!(status, SendStatus::Unknown | SendStatus::Failed) {
+            return Err(fault("只有失败或未知任务可以重试"));
+        }
+        *status = SendStatus::Queued;
         self.save().await
     }
     pub async fn action(

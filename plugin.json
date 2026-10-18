@@ -3,7 +3,7 @@
   "publisher": "ming321",
   "name": "key-reset-follow",
   "displayName": "Key 周额度跟随账号重置",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "确认账号新周期后清零关联 Key 周预算",
   "license": "Apache-2.0",
   "engines": {"codex-proxy-rs": ">=3.29.0, <3.30.0"},
