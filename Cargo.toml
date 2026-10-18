@@ -5,6 +5,8 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 gateway-plugin-sdk = { git = "https://github.com/zyycn/codex-proxy-rs", rev = "743a3aba70a4f78f27fb53d80a6e719599d2fe5e", features = ["io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

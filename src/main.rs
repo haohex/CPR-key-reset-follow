@@ -1,3 +1,4 @@
+//! 插件管理路由、会话与串行维护入口
 use gateway_plugin_sdk::{
     PluginFault,
     call::{
@@ -33,8 +34,33 @@ struct Command {
     version: Option<u64>,
     enabled: Option<bool>,
     display_timezone: Option<key_reset_follow::model::DisplayTimezone>,
+    probe_enabled: Option<bool>,
+    smtp: Option<key_reset_follow::model::SmtpSettings>,
+    #[serde(default)]
+    clear_smtp_password: bool,
+    recipient: Option<String>,
+    delivery_id: Option<u64>,
     #[serde(default)]
     acknowledge: bool,
+}
+fn update_smtp(
+    state: &mut key_reset_follow::model::State,
+    mut smtp: key_reset_follow::model::SmtpSettings,
+    clear: bool,
+) -> Result<(), PluginFault> {
+    if clear {
+        smtp.password.clear();
+    } else if smtp.password.is_empty() {
+        smtp.password.clone_from(&state.smtp.password);
+    }
+    key_reset_follow::delivery::validate(&smtp)?;
+    state.smtp = smtp;
+    Ok(())
+}
+fn public_state(state: &key_reset_follow::model::State) -> key_reset_follow::model::State {
+    let mut result = state.clone();
+    result.smtp.password.clear();
+    result
 }
 fn registration() -> ManagementRegistration {
     ManagementRegistration {
@@ -101,7 +127,34 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
                 if let Some(timezone) = cmd.display_timezone {
                     engine.state.display_timezone = timezone;
                 }
+                if let Some(enabled) = cmd.probe_enabled {
+                    engine.state.probe_enabled = enabled;
+                }
+                if let Some(smtp) = cmd.smtp {
+                    update_smtp(&mut engine.state, smtp, cmd.clear_smtp_password)?;
+                }
                 engine.save().await?;
+            }
+            "recipient" => {
+                let recipient = cmd.recipient.unwrap_or_default().trim().to_owned();
+                key_reset_follow::delivery::validate_recipient(&recipient)?;
+                engine
+                    .state
+                    .links
+                    .get_mut(key)
+                    .ok_or_else(|| fault("关联不存在"))?
+                    .recipient = recipient;
+                engine.save().await?;
+            }
+            "retry_probe" | "retry_mail" => {
+                engine
+                    .retry_delivery(
+                        key,
+                        cmd.delivery_id.ok_or_else(|| fault("缺少发送记录"))?,
+                        cmd.action == "retry_probe",
+                        cmd.acknowledge,
+                    )
+                    .await?;
             }
             "check" => {
                 let account = engine
@@ -166,8 +219,11 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
             budgets.insert(key.id.clone(), json!(budget));
         }
     }
+    // 密码仅写入私有状态，管理响应不回显
+    let smtp_password_configured = !engine.state.smtp.password.is_empty();
+    let state = public_state(&engine.state);
     Ok(
-        json!({"version": engine.version, "state": engine.state, "keys": keys, "accounts": accounts, "budgets": budgets}),
+        json!({"version": engine.version, "state": state, "smtp_password_configured": smtp_password_configured, "keys": keys, "accounts": accounts, "budgets": budgets}),
     )
 }
 #[tokio::main]
@@ -195,28 +251,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let lock = lock.clone();
             async move {
                 let _guard = lock.lock().await;
-                let host = SdkHost(call.host);
-                let mut engine = Engine::load(&host).await?;
-                engine.drain(now()).await?;
-                let mut due: Vec<_> = engine
-                    .state
-                    .accounts
-                    .iter()
-                    .filter(|(id, a)| {
-                        a.next_check <= now()
-                            && engine
-                                .state
-                                .links
-                                .values()
-                                .any(|l| &l.account_id == *id && !l.paused)
-                    })
-                    .map(|(id, a)| (a.next_check, id.clone()))
-                    .collect();
-                due.sort();
-                for (_, id) in due.into_iter().take(2) {
-                    engine.check(&id, now()).await?;
-                }
-                Ok(TypedReply::new(Empty {}))
+                tokio::time::timeout(std::time::Duration::from_secs(25), async {
+                    let host = SdkHost(call.host);
+                    let mut engine = Engine::load(&host).await?;
+                    engine.deliver_one().await?;
+                    engine.drain(now()).await?;
+                    let mut due: Vec<_> = engine
+                        .state
+                        .accounts
+                        .iter()
+                        .filter(|(id, a)| {
+                            a.next_check <= now()
+                                && engine
+                                    .state
+                                    .links
+                                    .values()
+                                    .any(|l| &l.account_id == *id && !l.paused)
+                        })
+                        .map(|(id, a)| (a.next_check, id.clone()))
+                        .collect();
+                    due.sort();
+                    for (_, id) in due.into_iter().take(2) {
+                        engine.check(&id, now()).await?;
+                    }
+                    Ok(TypedReply::new(Empty {}))
+                })
+                .await
+                .map_err(|_| fault("维护达到时间上限，未完成发送保持未知结果"))?
             }
         })?
         .build()?;
@@ -229,4 +290,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .run(plugin)
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use key_reset_follow::model::State;
+
+    #[test]
+    fn smtp_password_is_preserved_replaced_and_explicitly_cleared() {
+        let mut state = State::default();
+        state.smtp.password = "synthetic-secret".into();
+        update_smtp(&mut state, Default::default(), false).unwrap();
+        assert_eq!(state.smtp.password, "synthetic-secret");
+        let mut replacement = state.smtp.clone();
+        replacement.password = "synthetic-replacement".into();
+        update_smtp(&mut state, replacement, false).unwrap();
+        assert_eq!(state.smtp.password, "synthetic-replacement");
+        update_smtp(&mut state, Default::default(), true).unwrap();
+        assert!(state.smtp.password.is_empty());
+    }
+    #[test]
+    fn public_state_never_exposes_saved_password() {
+        let mut state = State::default();
+        state.smtp.password = "synthetic-secret".into();
+        let response = serde_json::to_string(&public_state(&state)).unwrap();
+        assert!(!response.contains("synthetic-secret"));
+        assert_eq!(state.smtp.password, "synthetic-secret");
+    }
 }

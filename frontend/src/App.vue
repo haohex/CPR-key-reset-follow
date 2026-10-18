@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { DisplayTimezone, Link, Sample, Snapshot } from './api/modules/follow'
-import { BaseButton, BaseCheckbox, BaseIconButton, BaseModal, BaseSelect, BaseSwitch, BaseTag } from '@codex-proxy/ui'
+import type { DisplayTimezone, Link, Sample, SendStatus, SmtpSettings, Snapshot } from './api/modules/follow'
+import { BaseButton, BaseCheckbox, BaseIconButton, BaseInput, BaseModal, BaseSelect, BaseSwitch, BaseTag } from '@codex-proxy/ui'
 import { ArrowLeft, ChevronRight, Plus, RefreshCw, Settings } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { command, load } from './api/modules/follow'
@@ -21,6 +21,13 @@ const settingsOpen = ref(false)
 const draftEarly = ref(true)
 const draftTimezone = ref<DisplayTimezone>('browser')
 const saved = ref(false)
+const draftPort = ref('587')
+const draftProbe = ref(false)
+const clearSmtpPassword = ref(false)
+const draftRecipient = ref('')
+const draftSmtp = ref<SmtpSettings>({ enabled: false, server: '', port: 587, security: 'starttls', username: '', password: '', from: '' })
+const sendLabel = (status: SendStatus) => ({ skipped: '未启用', queued: '等待发送', unknown: '结果未知，可能已发送', succeeded: '成功', failed: '失败' })[status]
+const securityOptions = [{ value: 'starttls', label: 'STARTTLS' }, { value: 'tls', label: 'TLS' }]
 const timezones = [
   { value: 'browser', label: '跟随浏览器' },
   { value: 'Asia/Shanghai', label: '北京时间（UTC+8）' },
@@ -54,6 +61,10 @@ const needs = computed(() => rows.value.filter(l => ['等待确认', '需处理'
 const keys = computed(() => (data.value?.keys || []).map(k => ({ value: k.id, label: k.name, disabled: !!data.value?.state.links[k.id], description: data.value?.state.links[k.id] ? `已关联 ${account(data.value.state.links[k.id])?.name || '账号'}` : undefined })))
 const accounts = computed(() => (data.value?.accounts || []).map(a => ({ value: a.account_id, label: a.name || a.email || a.account_id, description: (a.provider_id !== 'openai' || a.authentication_kind !== 'oauth') ? '仅支持 Codex 账号周窗口' : a.name !== a.email ? a.email || undefined : undefined, disabled: (a.provider_id !== 'openai' || a.authentication_kind !== 'oauth') })))
 function openSettings() {
+  clearSmtpPassword.value = false
+  draftProbe.value = data.value!.state.probe_enabled || false
+  draftSmtp.value = { ...data.value!.state.smtp, port: data.value!.state.smtp?.port || 587, password: '' }
+  draftPort.value = String(draftSmtp.value.port)
   draftEarly.value = data.value!.state.early_auto
   draftTimezone.value = data.value!.state.display_timezone || 'browser'
   error.value = ''
@@ -73,7 +84,7 @@ async function saveSettings() {
   saved.value = false
   let committed = false
   try {
-    await command({ action: 'settings', version: data.value?.version, enabled: draftEarly.value, display_timezone: draftTimezone.value })
+    await command({ action: 'settings', version: data.value?.version, enabled: draftEarly.value, display_timezone: draftTimezone.value, probe_enabled: draftProbe.value, clear_smtp_password: clearSmtpPassword.value, smtp: { ...draftSmtp.value, port: Number(draftPort.value) } })
     committed = true
     data.value = await load()
     saved.value = true
@@ -89,9 +100,9 @@ async function saveSettings() {
   }
   finally { busy.value = false }
 }
-watch([draftEarly, draftTimezone], () => {
+watch([draftEarly, draftTimezone, draftProbe, draftSmtp, draftPort, clearSmtpPassword], () => {
   saved.value = false
-})
+}, { deep: true })
 async function refresh() {
   try {
     data.value = await load()
@@ -101,6 +112,7 @@ async function refresh() {
 }
 function open(kind: string, l?: Link) {
   selected.value = l?.key_id || ''
+  draftRecipient.value = l?.recipient || ''
   modal.value = kind
   acknowledge.value = false
   error.value = ''
@@ -190,6 +202,31 @@ onUnmounted(() => clearInterval(timer))
           <div class="timezone-input">
             <BaseSelect v-model="draftTimezone" :options="timezones" :disabled="busy" aria-label="显示时区" /><small>当前显示：{{ draftTimezoneText }}</small>
           </div>
+        </section>
+        <section class="setting-row">
+          <div>
+            <h3>重置后发送测试消息</h3><p class="muted">
+              使用关联 Key 和账号向 gpt-6.1-sol 发送 hello，沿用默认思考强度，正常计费
+            </p>
+          </div>
+          <BaseSwitch v-model="draftProbe" label="重置后发送测试消息" :disabled="busy" />
+        </section>
+        <section>
+          <h3>SMTP 邮件提醒</h3>
+          <BaseSwitch v-model="draftSmtp.enabled" show-label label="启用邮件提醒" :disabled="busy" />
+          <p class="muted">
+            收件邮箱在每个关联详情中设置；密码留空保留已保存值
+          </p>
+          <label class="field">服务器<BaseInput v-model="draftSmtp.server" :disabled="busy" /></label>
+          <label class="field">端口<BaseInput v-model="draftPort" type="number" :disabled="busy" /></label>
+          <label class="field">连接安全<BaseSelect v-model="draftSmtp.security" :options="securityOptions" :disabled="busy" /></label>
+          <label class="field">用户名<BaseInput v-model="draftSmtp.username" :disabled="busy" autocomplete="off" /></label>
+          <label class="field">密码<BaseInput v-model="draftSmtp.password" type="password" :disabled="busy" autocomplete="new-password" /></label>
+          <p class="muted">
+            SMTP 密码：{{ data?.smtp_password_configured ? '已设置' : '未设置' }}
+          </p>
+          <BaseCheckbox v-model="clearSmtpPassword" show-label label="清除已保存的 SMTP 密码" :disabled="busy" />
+          <label class="field">发件地址<BaseInput v-model="draftSmtp.from" :disabled="busy" /></label>
         </section>
         <p v-if="error" role="alert" class="error">
           {{ error }}
@@ -308,6 +345,26 @@ onUnmounted(() => clearInterval(timer))
       <dl><dt>Key 自身的周用量重置时间</dt><dd>{{ budget(link)?.weekly_resets_at_ms ? date(budget(link)!.weekly_resets_at_ms, true) : '尚未开启或已到期' }}</dd></dl><p class="muted">
         由宿主独立计算，可能早于账号重置；这不是 Key 失效时间
       </p>
+      <h4>重置后通知</h4>
+      <label class="field">收件邮箱<BaseInput v-model="draftRecipient" type="email" :disabled="busy" /></label>
+      <BaseButton :disabled="busy" @click="act('recipient', { recipient: draftRecipient }, false)">
+        保存邮箱
+      </BaseButton>
+      <p class="muted">
+        只影响后续重置；已排队邮件使用重置时的收件地址
+      </p>
+      <div v-for="job in [...(link.deliveries || [])].reverse()" :key="job.id">
+        <p>{{ date(job.reset_at) }} · 测试：{{ sendLabel(job.probe) }} · 邮件：{{ sendLabel(job.mail) }}</p>
+        <template v-if="['unknown', 'failed'].includes(job.probe) || ['unknown', 'failed'].includes(job.mail)">
+          <BaseCheckbox v-model="acknowledge" show-label label="我了解重试可能产生重复请求或重复邮件" />
+          <BaseButton v-if="['unknown', 'failed'].includes(job.probe)" :disabled="busy || !acknowledge" @click="act('retry_probe', { delivery_id: job.id }, false)">
+            重试测试
+          </BaseButton>
+          <BaseButton v-if="['unknown', 'failed'].includes(job.mail)" :disabled="busy || !acknowledge" @click="act('retry_mail', { delivery_id: job.id }, false)">
+            重试邮件
+          </BaseButton>
+        </template>
+      </div>
       <h4>最近事件</h4><p v-for="(event, index) in [...link.events].reverse()" :key="index" class="muted">
         {{ date(event.at) }} · {{ event.reason }}
       </p>
@@ -335,7 +392,7 @@ onUnmounted(() => clearInterval(timer))
       <template v-if="link.pending?.kind === 'unknown'">
         <p>重置结果未知，已停止自动重试</p><p class="muted">
           保留现有用量并跳过会重新建立基线
-        </p><BaseCheckbox v-model="acknowledge" label="我了解可能清掉期间新产生的消费" />
+        </p><BaseCheckbox v-model="acknowledge" show-label label="我了解可能清掉期间新产生的消费" />
       </template>
       <template v-else-if="link.pending?.kind === 'changed'">
         <p>目标窗口标识或时长发生变化，已停止自动清零</p>
@@ -356,7 +413,7 @@ onUnmounted(() => clearInterval(timer))
       </p>
     </template>
     <template v-else-if="modal === 'delete'">
-      <p>仅删除本插件的关联记录，不撤销已执行的重置</p><BaseCheckbox v-model="acknowledge" label="确认删除此关联" />
+      <p>仅删除本插件的关联记录，不撤销已执行的重置</p><BaseCheckbox v-model="acknowledge" show-label label="确认删除此关联" />
     </template>
     <template #footer>
       <span v-if="modal === 'add'" class="muted">仅建立基线，不清零</span><BaseButton :disabled="busy" @click="modal = ''">

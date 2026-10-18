@@ -1,4 +1,5 @@
-use crate::model::State;
+//! 通过公开 SDK 与 SMTP 发送边界访问外部服务
+use crate::model::{SmtpSettings, State};
 use gateway_plugin_sdk::{
     ErrorCode, PluginFault,
     call::{
@@ -14,6 +15,24 @@ pub fn fault(message: impl Into<String>) -> PluginFault {
     PluginFault::new(ErrorCode::Rejected, message)
 }
 pub trait Host: Sync {
+    fn probe(
+        &self,
+        _key: &str,
+        _account: &str,
+    ) -> impl Future<Output = Result<(), PluginFault>> + Send {
+        async { Err(fault("此宿主未实现模型测试")) }
+    }
+    fn email(
+        &self,
+        settings: &SmtpSettings,
+        recipient: &str,
+        body: &str,
+    ) -> impl Future<Output = Result<(), PluginFault>> + Send {
+        crate::delivery::send_email(settings, recipient, body)
+    }
+    fn key_name(&self, key: &str) -> impl Future<Output = Result<String, PluginFault>> + Send {
+        async move { Ok(key.to_owned()) }
+    }
     fn load(&self) -> impl Future<Output = Result<(State, Option<u64>), PluginFault>> + Send;
     fn save(
         &self,
@@ -29,6 +48,48 @@ pub trait Host: Sync {
 }
 pub struct SdkHost(pub HostClient);
 impl Host for SdkHost {
+    async fn key_name(&self, key: &str) -> Result<String, PluginFault> {
+        let mut cursor = None;
+        loop {
+            let page = self
+                .0
+                .list_keys(gateway_plugin_sdk::call::host::KeyListRequest { cursor, limit: 200 })
+                .await?;
+            if let Some(found) = page.keys.into_iter().find(|k| k.id == key) {
+                return Ok(found.name);
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Err(fault("Key 不存在"));
+            }
+        }
+    }
+    async fn probe(&self, key: &str, account: &str) -> Result<(), PluginFault> {
+        let reply = self
+            .0
+            .call(
+                "host.model.execute",
+                serde_json::json!({
+                    "client_key_id": key, "account_id": account, "model": "gpt-6.1-sol",
+                    "protocol": "openai", "operation": "generate"
+                }),
+                br#"{"model":"gpt-6.1-sol","input":"hello"}"#.to_vec(),
+            )
+            .await
+            .map_err(SessionError::into_plugin_fault)?;
+        let batch = gateway_plugin_sdk::call::host::ModelEventBatch::decode(&reply.payload)
+            .map_err(|_| fault("模型响应解析失败"))?;
+        if !batch.events.iter().flat_map(|e| &e.facts).any(|e| {
+            matches!(
+                e,
+                gateway_plugin_sdk::call::model::CanonicalEvent::Completed { .. }
+            )
+        }) {
+            return Err(fault("未确认模型完成"));
+        }
+        Ok(())
+    }
+
     async fn load(&self) -> Result<(State, Option<u64>), PluginFault> {
         let reply = self
             .0
