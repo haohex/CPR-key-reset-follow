@@ -17,6 +17,7 @@ const preview = ref<Sample>()
 const previewError = ref('')
 const previewBusy = ref(false)
 const acknowledge = ref(false)
+const manualAcknowledge = ref(false)
 const settingsOpen = ref(false)
 const draftEarly = ref(true)
 const draftTimezone = ref<DisplayTimezone>('browser')
@@ -40,6 +41,7 @@ const modalOpen = computed({ get: () => !!modal.value, set: (value) => {
   if (!value)
     modal.value = ''
 } })
+const smtpReady = computed(() => !!data.value?.state.smtp.server.trim() && !!data.value?.state.smtp.port && !!data.value?.state.smtp.from.trim())
 const rows = computed(() => Object.values(data.value?.state.links || {}))
 const link = computed(() => data.value?.state.links[selected.value])
 const account = (l: Link) => data.value?.accounts.find(a => a.account_id === l.account_id)
@@ -137,6 +139,30 @@ async function act(action: string, extra: object = {}, close = true) {
   catch (e) { error.value = (e as Error).message }
   finally { busy.value = false }
 }
+function confirmManual(probe: boolean) {
+  manualAcknowledge.value = false
+  error.value = ''
+  modal.value = probe ? 'manual_probe' : 'manual_mail'
+}
+async function sendManual() {
+  if (busy.value || !manualAcknowledge.value)
+    return
+  busy.value = true
+  error.value = ''
+  let failure = ''
+  try {
+    await command({ action: modal.value, key_id: selected.value, version: data.value?.version, acknowledge: manualAcknowledge.value })
+  }
+  catch (e) { failure = (e as Error).message }
+  try {
+    data.value = await load()
+  }
+  catch (e) { failure = `${failure ? `${failure}；` : ''}无法刷新测试记录：${(e as Error).message}，请刷新查看持久结果，勿直接重复发送` }
+  error.value = failure
+  modal.value = 'detail'
+  manualAcknowledge.value = false
+  busy.value = false
+}
 let previewGeneration = 0
 watch(accountId, async (id) => {
   const generation = ++previewGeneration
@@ -231,6 +257,9 @@ onUnmounted(() => clearInterval(timer))
         <p v-if="error" role="alert" class="error">
           {{ error }}
         </p>
+        <p class="muted">
+          保存设置后，到关联详情发送测试消息或测试邮件
+        </p>
         <div class="settings-actions">
           <span v-if="saved" role="status" class="saved">设置已保存</span>
           <BaseButton :disabled="busy" @click="closeSettings">
@@ -314,7 +343,7 @@ onUnmounted(() => clearInterval(timer))
       </table>
     </template>
   </main>
-  <BaseModal v-model="modalOpen" :title="({ add: '添加关联', detail: '关联详情', process: '处理关联', delete: '删除关联' })[modal] || '关联'" :dismissible="!busy" :draggable="false">
+  <BaseModal v-model="modalOpen" :title="({ add: '添加关联', detail: '关联详情', process: '处理关联', delete: '删除关联', manual_probe: '发送测试消息', manual_mail: '发送测试邮件' })[modal] || '关联'" :dismissible="!busy" :draggable="false">
     <p v-if="error" role="alert" class="error">
       {{ error }}
     </p>
@@ -344,6 +373,33 @@ onUnmounted(() => clearInterval(timer))
       </p>
       <dl><dt>Key 自身的周用量重置时间</dt><dd>{{ budget(link)?.weekly_resets_at_ms ? date(budget(link)!.weekly_resets_at_ms, true) : '尚未开启或已到期' }}</dd></dl><p class="muted">
         由宿主独立计算，可能早于账号重置；这不是 Key 失效时间
+      </p>
+      <h4>手动测试</h4>
+      <p class="muted">
+        立即使用已保存的配置发送，不清零额度；自动开关关闭或关联暂停时也可测试
+      </p>
+      <div class="tools">
+        <BaseButton :disabled="busy" @click="confirmManual(true)">
+          发送测试消息
+        </BaseButton>
+        <BaseButton :disabled="busy || !smtpReady || !link.recipient || draftRecipient.trim() !== link.recipient" @click="confirmManual(false)">
+          发送测试邮件
+        </BaseButton>
+      </div>
+      <p v-if="!smtpReady" class="muted">
+        请先在设置中保存 SMTP 服务器、端口和发件地址
+      </p>
+      <p v-if="draftRecipient.trim() !== link.recipient" class="muted">
+        收件邮箱已修改，请先保存邮箱再测试邮件
+      </p>
+      <p v-else-if="!link.recipient" class="muted">
+        请先保存收件邮箱和 SMTP 设置再测试邮件
+      </p>
+      <p v-if="link.last_manual_probe" role="status">
+        最近手动消息：{{ date(link.last_manual_probe.at) }} · {{ link.last_manual_probe.status === 'succeeded' ? '已确认成功' : '未确认成功，可能已发送，不自动重试' }}
+      </p>
+      <p v-if="link.last_manual_mail" role="status">
+        最近手动邮件：{{ date(link.last_manual_mail.at) }} · {{ link.last_manual_mail.recipient }} · {{ link.last_manual_mail.status === 'succeeded' ? '已确认成功' : '未确认成功，可能已发送，不自动重试' }}
       </p>
       <h4>重置后通知</h4>
       <label class="field">收件邮箱<BaseInput v-model="draftRecipient" type="email" :disabled="busy" /></label>
@@ -385,6 +441,18 @@ onUnmounted(() => clearInterval(timer))
         </BaseButton>
       </div>
     </template>
+    <template v-else-if="link && ['manual_probe', 'manual_mail'].includes(modal)">
+      <p v-if="modal === 'manual_probe'">
+        将使用 {{ keyName(link) }} 和关联账号向 gpt-6.1-sol 发送 hello，思考强度沿用默认，正常计费
+      </p>
+      <p v-else>
+        将使用已保存的 SMTP 配置向 {{ link.recipient }} 发送一封 SMTP测试邮件
+      </p>
+      <p class="muted">
+        本操作不清零额度；结果未知时不会自动重试，再次发送可能重复计费或投递
+      </p>
+      <BaseCheckbox v-model="manualAcknowledge" show-label label="确认立即发送，并了解重复发送的风险" :disabled="busy" />
+    </template>
     <template v-else-if="link && modal === 'process'">
       <h3>{{ keyName(link) }}</h3><p class="muted">
         {{ accountName(link) }}
@@ -418,6 +486,9 @@ onUnmounted(() => clearInterval(timer))
     <template #footer>
       <span v-if="modal === 'add'" class="muted">仅建立基线，不清零</span><BaseButton :disabled="busy" @click="modal = ''">
         {{ modal === 'detail' ? '关闭' : '取消' }}
+      </BaseButton>
+      <BaseButton v-if="['manual_probe', 'manual_mail'].includes(modal)" variant="primary" :loading="busy" :disabled="!manualAcknowledge || busy" @click="sendManual">
+        确认发送
       </BaseButton>
       <BaseButton v-if="modal === 'add'" variant="primary" :loading="busy" :disabled="!keyId || !preview || previewBusy" @click="act('add', { key_id: keyId, account_id: accountId })">
         添加

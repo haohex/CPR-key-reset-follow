@@ -26,9 +26,10 @@ pub trait Host: Sync {
         &self,
         settings: &SmtpSettings,
         recipient: &str,
+        subject: &str,
         body: &str,
     ) -> impl Future<Output = Result<(), PluginFault>> + Send {
-        crate::delivery::send_email(settings, recipient, body)
+        crate::delivery::send_email(settings, recipient, subject, body)
     }
     fn key_name(&self, key: &str) -> impl Future<Output = Result<String, PluginFault>> + Send {
         async move { Ok(key.to_owned()) }

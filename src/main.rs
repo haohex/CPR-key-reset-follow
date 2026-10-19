@@ -146,6 +146,17 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
                     .recipient = recipient;
                 engine.save().await?;
             }
+            "manual_probe" | "manual_mail" => {
+                engine
+                    .manual_test(
+                        key,
+                        cmd.action == "manual_probe",
+                        cmd.acknowledge,
+                        cmd.version,
+                        now(),
+                    )
+                    .await?;
+            }
             "retry_probe" | "retry_mail" => {
                 engine
                     .retry_delivery(

@@ -12,14 +12,18 @@
 
 要求 **官方 Codex Proxy RS ≥3.29.0 且 <3.30.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.29.1；本版宿主安装与升级测试由使用者完成。旧 CPR 请使用先前发布的兼容版本。
 
+当前源码版本为 **0.1.5-beta.1**，包含手动发送测试，尚未发布远端 Release；GitHub 的现有正式版不包含该功能。使用本地验证包时，在已有插件详情选择 **手动安装版本 → 上传包 → 保存来源并继续**，上传匹配宿主架构的 `.tar.gz` 并确认更新。插件身份保持不变，保留原有关联和私有状态，无需卸载重装
+
+以下 GitHub 安装步骤用于仓库已发布的版本：
+
 1. 打开宿主的 **插件管理 → 安装插件 → GitHub**。
-2. 仓库填写 `Ming-321/CPR-key-reset-follow`。版本标签留空即可查询最新正式版，无需勾选“允许查询预发行版”。
+2. 仓库填写 `haohex/CPR-key-reset-follow`。版本标签留空即可查询最新正式版，无需勾选“允许查询预发行版”。
 3. 点击“下一步”，选择与宿主架构对应的 `.tar.gz` 附件（x86_64 或 aarch64/ARM64），按提示完成安装并启用。
 4. 打开插件页面，点击“添加关联”，选择现有 Key 和对应的 Codex 账号。
 
 首次关联只记录当前周期，不清零。Key 应已通过宿主的分组与路由设置使用该账号；插件不会替你调整路由。
 
-安装包和同名 `.sha256` 校验文件见 [Releases](https://github.com/Ming-321/CPR-key-reset-follow/releases)。也可以下载后在“上传包”中安装。
+安装包和同名 `.sha256` 校验文件见 [Releases](https://github.com/haohex/CPR-key-reset-follow/releases)。也可以下载后在“上传包”中安装。
 
 **从 beta 更新：** 打开插件详情，选择“手动安装版本”→ GitHub，清空旧的 beta 标签并取消“允许查询预发行版”，按提示保存来源、选择最新正式版并更新。这样后续“检查更新”会查询稳定版；保留旧标签则仍会查询固定的 beta。原有关联、暂停状态、待处理记录和提前重置开关会保留，不需要删除插件或重新添加关联。新增时区设置默认为“跟随浏览器”。
 
@@ -38,6 +42,10 @@
 
 每个关联最多保留 32 条发送记录，全插件最多 128 条；已完成历史会清理，未知与待发送记录不自动删除。积压达到限制时，仍完成清零，本次测试与邮件不排队并记录事件，需管理员处理积压
 
+在设置中保存 SMTP 参数，再到关联详情点击“发送测试消息”或“发送测试邮件”，独立确认后立即发送，无需等待周限重置，也不会清零或更新周期基线。手动测试允许自动开关关闭或关联暂停；消息仍使用关联 Key 与账号，正常计费；邮件使用已保存的 SMTP 和该关联邮箱，主题明确为 SMTP测试。收件邮箱草稿须先保存
+
+详情分别保留最近一次手动消息与邮件的持久结果。未确认成功时显示“可能已发送”，刷新与维护不会重发；再次确认测试可能重复计费或投递。页面或请求报错后先刷新查看结果，再决定是否重发
+
 需要处理时，点击对应行的“处理”。暂停、恢复和删除关联在详情中；恢复时重新记录当前周期，不补做暂停期间错过的重置。
 
 ## 使用前了解
@@ -53,6 +61,8 @@
 [深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png)
 
 原有截图来自官方宿主中的实际插件页面，使用合成数据。通知功能的[设置](docs/screenshots/notifications-settings.png)、[详情](docs/screenshots/notifications-detail.png)、[深色](docs/screenshots/notifications-dark.png)与[窄屏](docs/screenshots/notifications-narrow.png)截图来自当前构建的合成数据预览，使用公开 UI 的主题变量；不代表真实宿主、模型或 SMTP 联调通过。
+手动测试的[结果详情](docs/screenshots/manual-test-result.png)和[发送确认](docs/screenshots/manual-test-confirm.png)同样来自合成桥接预览，不代表真实外部发送验收
+
 开发、联调和发布见 [贡献指南](CONTRIBUTING.md)，周期判定与恢复规则见 [设计文档](docs/design.md)。
 
 许可证：[Apache-2.0](LICENSE)
