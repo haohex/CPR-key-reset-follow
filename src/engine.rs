@@ -414,7 +414,11 @@ impl<'a, H: Host> Engine<'a, H> {
                     .unwrap_or_else(|_| "关联 Key".into());
                 let reset_time =
                     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(job.reset_at)
-                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .and_then(|t| {
+                            chrono::FixedOffset::east_opt(8 * 3600)
+                                .map(|offset| t.with_timezone(&offset))
+                        })
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC+8").to_string())
                         .unwrap_or_else(|| "时间不可用".into());
                 let body = format!(
                     "Key：{name}\n周额度已重置\n重置时间：{reset_time}\n模型测试：{}\n",

@@ -1,6 +1,6 @@
 [package]
 name = "key-reset-follow"
-version = "0.1.5-beta.1"
+version = "0.1.5-beta.2"
 edition = "2024"
 license = "Apache-2.0"
 
