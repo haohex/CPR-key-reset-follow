@@ -18,7 +18,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.97.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
       - uses: pnpm/action-setup@v4
@@ -39,7 +39,7 @@ jobs:
         run: |
           git init /tmp/cpr-sdk
           git -C /tmp/cpr-sdk remote add origin https://github.com/zyycn/codex-proxy-rs.git
-          git -C /tmp/cpr-sdk fetch --depth 1 origin 743a3aba70a4f78f27fb53d80a6e719599d2fe5e
+          git -C /tmp/cpr-sdk fetch --depth 1 origin 47d30474af7c3e1fab433f2d4a70430fae548ff2
           git -C /tmp/cpr-sdk checkout --detach FETCH_HEAD
           cargo build --manifest-path /tmp/cpr-sdk/backend/Cargo.toml -p codex-proxy-plugin-cli --locked
       - run: /tmp/cpr-sdk/backend/target/debug/cpr-plugin package --manifest plugin.json --binary target/release/key-reset-follow --target ${{ matrix.target }} --resource-map web=frontend/dist --output-dir dist

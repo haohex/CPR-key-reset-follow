@@ -78,7 +78,8 @@ impl Host for Fake {
         if subject == "CPR SMTP测试" {
             assert!(body.contains("SMTP测试") && !body.contains("已重置"));
         } else {
-            assert!(body.contains("周额度已重置"));
+            assert_eq!(subject, "CPR Key 日、周额度已重置");
+            assert!(body.contains("日额度和周额度已同步重置"));
         }
         let mut s = self.0.lock().unwrap();
         if s.expect_manual {

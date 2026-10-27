@@ -2,7 +2,7 @@ import { request } from '../request'
 
 export interface Sample { observed: number, reset: number, used: number | null }
 export type DisplayTimezone = 'browser' | 'Asia/Shanghai' | 'UTC'
-export interface Budget { weekly_limit_usd: string, weekly_used_usd: string, weekly_resets_at_ms: number | null }
+export interface Budget { daily_limit_usd: string, daily_used_usd: string, weekly_limit_usd: string, weekly_used_usd: string, weekly_resets_at_ms: number | null }
 export interface SmtpSettings { enabled: boolean, server: string, port: number, security: 'tls' | 'starttls', username: string, password: string, from: string }
 export type SendStatus = 'skipped' | 'queued' | 'unknown' | 'succeeded' | 'failed'
 export interface Delivery { id: number, reset_at: number, recipient: string, probe: SendStatus, mail: SendStatus }

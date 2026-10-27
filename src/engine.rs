@@ -421,14 +421,14 @@ impl<'a, H: Host> Engine<'a, H> {
                         .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC+8").to_string())
                         .unwrap_or_else(|| "时间不可用".into());
                 let body = format!(
-                    "Key：{name}\n周额度已重置\n重置时间：{reset_time}\n模型测试：{}\n",
+                    "Key：{name}\n日额度和周额度已同步重置\n重置时间：{reset_time}\n模型测试：{}\n",
                     job.probe.label()
                 );
                 self.host
                     .email(
                         &self.state.smtp,
                         &job.recipient,
-                        "CPR Key 周额度已重置",
+                        "CPR Key 日、周额度已重置",
                         &body,
                     )
                     .await

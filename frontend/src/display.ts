@@ -1,8 +1,5 @@
-export type DisplayTimezone = 'browser' | 'Asia/Shanghai' | 'UTC'
-
-export function resolveTimezone(selection: DisplayTimezone): string {
-  return selection === 'browser' ? new Intl.DateTimeFormat().resolvedOptions().timeZone : selection
-}
+// 页面与邮件统一按北京时间显示，旧状态中的 display_timezone 仅为兼容保留，不再生效
+export const DISPLAY_TIMEZONE = 'Asia/Shanghai'
 
 export function displayDate(value: number | null | undefined, timezone: string, full = false): string {
   if (value == null)

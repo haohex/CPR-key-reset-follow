@@ -139,7 +139,7 @@ dependencies = [
 [[package]]
 name = "gateway-plugin-sdk"
 version = "0.1.0"
-source = "git+https://github.com/zyycn/codex-proxy-rs?rev=743a3aba70a4f78f27fb53d80a6e719599d2fe5e#743a3aba70a4f78f27fb53d80a6e719599d2fe5e"
+source = "git+https://github.com/zyycn/codex-proxy-rs?rev=47d30474af7c3e1fab433f2d4a70430fae548ff2#47d30474af7c3e1fab433f2d4a70430fae548ff2"
 dependencies = [
  "base64",
  "semver",
@@ -278,7 +278,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "key-reset-follow"
-version = "0.1.5-beta.2"
+version = "0.1.5-beta.5"
 dependencies = [
  "chrono",
  "gateway-plugin-sdk",

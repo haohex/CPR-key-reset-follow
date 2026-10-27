@@ -88,7 +88,7 @@ fn registration() -> ManagementRegistration {
         pages: vec![ManagementPage {
             id: "follow".into(),
             title: "Key 周额度跟随账号重置".into(),
-            description: Some("确认账号新周期后清零关联 Key 周预算".into()),
+            description: Some("确认账号新周期后同步清零关联 Key 日、周用量".into()),
             entry: "web/index.html".into(),
             icon: None,
         }],

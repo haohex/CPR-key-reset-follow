@@ -11,6 +11,14 @@ use gateway_plugin_sdk::{
 };
 use std::future::Future;
 
+/// 日、周用量在宿主同一事务中清零，只调用一次，避免只清一项后结果未知
+pub fn reset_request(key: &str) -> ResetKeyBudgetRequest {
+    ResetKeyBudgetRequest {
+        client_key_id: key.into(),
+        period: BudgetPeriod::All,
+    }
+}
+
 pub fn fault(message: impl Into<String>) -> PluginFault {
     PluginFault::new(ErrorCode::Rejected, message)
 }
@@ -152,10 +160,7 @@ impl Host for SdkHost {
     }
     async fn reset(&self, key: &str) -> Result<(), PluginFault> {
         self.0
-            .reset_key_budget(ResetKeyBudgetRequest {
-                client_key_id: key.into(),
-                period: BudgetPeriod::Weekly,
-            })
+            .reset_key_budget(reset_request(key))
             .await
             .map(|_| ())
     }

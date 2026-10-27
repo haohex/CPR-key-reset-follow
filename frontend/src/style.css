@@ -32,7 +32,6 @@ dl { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr; gap: 12px 20p
 .settings-heading { padding: 4px 0 12px; }
 .setting-row { justify-content: space-between; align-items: flex-start; padding: 28px 0; border-bottom: 1px solid var(--cp-color-border-secondary); gap: 28px; }
 .setting-row p { font-size: 13px; margin: 8px 0 0; } .setting-row > :last-child { flex-shrink: 0; }
-.timezone-input { width: 280px; } .timezone-input small { margin-top: 9px; overflow-wrap: anywhere; }
 .settings-actions { justify-content: flex-end; padding: 24px 0 8px; } .saved { color: var(--cp-color-success-text); margin-right: auto; font-size: 13px; }
 @media (max-width: 1000px) {
   .panel { padding: 20px; } th, td { padding-left: 9px; padding-right: 9px; }
@@ -48,6 +47,6 @@ dl { display: grid; grid-template-columns: minmax(100px, 1fr) 2fr; gap: 12px 20p
   td[data-label]::before { content: attr(data-label); color: var(--cp-color-text-secondary); font-size: 12px; flex-shrink: 0; }
   .numeric .limit { display: inline; font-size: inherit; } .reset-time { flex-wrap: wrap; } .reset-time small { width: 100%; text-align: right; }
   .row-actions { position: absolute; right: 0; top: 15px; width: auto; }
-  .setting-row { gap: 16px; } .timezone-setting { flex-direction: column; } .timezone-input { width: 100%; }
+  .setting-row { gap: 16px; }
   h2 { font-size: 19px; } dl { grid-template-columns: 1fr; gap: 6px; } dd { margin-bottom: 10px; }
 }
