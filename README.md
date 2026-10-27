@@ -12,9 +12,7 @@
 
 要求 **官方 Codex Proxy RS ≥3.34.0 且 <3.35.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.34.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
 
-当前源码版本为 **0.1.5-beta.5**，包含手动发送测试及日、周用量同步清零，尚未发布远端 Release；GitHub 的现有正式版不包含该功能。使用本地验证包时，在已有插件详情选择 **手动安装版本 → 上传包 → 保存来源并继续**，上传匹配宿主架构的 `.tar.gz` 并确认更新。插件身份保持不变，保留原有关联和私有状态，无需卸载重装
-
-以下 GitHub 安装步骤用于仓库已发布的版本：
+以下为首次安装步骤：
 
 1. 打开宿主的 **插件管理 → 安装插件 → GitHub**。
 2. 仓库填写 `haohex/CPR-key-reset-follow`。版本标签留空即可查询最新正式版，无需勾选“允许查询预发行版”。
@@ -25,7 +23,7 @@
 
 安装包和同名 `.sha256` 校验文件见 [Releases](https://github.com/haohex/CPR-key-reset-follow/releases)。也可以下载后在“上传包”中安装。
 
-**从 beta 更新：** 打开插件详情，选择“手动安装版本”→ GitHub，清空旧的 beta 标签并取消“允许查询预发行版”，按提示保存来源、选择最新正式版并更新。这样后续“检查更新”会查询稳定版；保留旧标签则仍会查询固定的 beta。原有关联、暂停状态、待处理记录和提前重置开关会保留，不需要删除插件或重新添加关联。页面与邮件时间统一为北京时间 UTC+8。
+**已安装插件改为 GitHub 更新：** 本地上传的版本没有远程更新来源。打开已有插件详情，选择“手动安装版本”→ GitHub，仓库填写 `haohex/CPR-key-reset-follow`，版本标签留空、不勾选“允许查询预发行版”，按提示“保存来源并继续”，选择匹配架构的附件安装并切换到新版本。之后在插件详情点击“检查更新”即可查询最新正式版；预发行版需要固定标签，不会被检查更新发现。不要卸载重装，卸载会清除私有数据。原有关联、暂停状态、待处理记录和提前重置开关会保留，不需要删除插件或重新添加关联。页面与邮件时间统一为北京时间 UTC+8。
 
 ## 使用
 
@@ -58,9 +56,9 @@
 
 ## 更多
 
-[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png)
+[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png) · [今日用量详情](docs/screenshots/daily-detail.png)
 
-原有截图来自官方宿主中的实际插件页面，使用合成数据。通知功能的[设置](docs/screenshots/notifications-settings.png)、[详情](docs/screenshots/notifications-detail.png)、[深色](docs/screenshots/notifications-dark.png)与[窄屏](docs/screenshots/notifications-narrow.png)截图来自当前构建的合成数据预览，使用公开 UI 的主题变量；不代表真实宿主、模型或 SMTP 联调通过。
+原有截图来自官方宿主中的实际插件页面，使用合成数据；[设置](docs/screenshots/settings.png)与[今日用量详情](docs/screenshots/daily-detail.png)已替换为当前构建的合成桥接预览。通知功能的[设置](docs/screenshots/notifications-settings.png)、[详情](docs/screenshots/notifications-detail.png)、[深色](docs/screenshots/notifications-dark.png)与[窄屏](docs/screenshots/notifications-narrow.png)截图来自当前构建的合成数据预览，使用公开 UI 的主题变量；不代表真实宿主、模型或 SMTP 联调通过。
 手动测试的[结果详情](docs/screenshots/manual-test-result.png)和[发送确认](docs/screenshots/manual-test-confirm.png)同样来自合成桥接预览，不代表真实外部发送验收
 
 开发、联调和发布见 [贡献指南](CONTRIBUTING.md)，周期判定与恢复规则见 [设计文档](docs/design.md)。
