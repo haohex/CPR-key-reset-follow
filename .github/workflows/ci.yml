@@ -75,7 +75,7 @@ jobs:
         run: |
           test "$RELEASE_TAG" = "v$(jq -r .version plugin.json)"
           for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-            archive="ming321.key-reset-follow-${RELEASE_TAG#v}-${target}.tar.gz"
+            archive="haohex.key-reset-follow-${RELEASE_TAG#v}-${target}.tar.gz"
             test -s "dist/$archive"
             test -s "dist/$archive.sha256"
             (cd dist && sha256sum --check "$archive.sha256")
