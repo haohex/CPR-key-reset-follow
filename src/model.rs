@@ -36,6 +36,10 @@ pub struct Link {
     pub recipient: String,
     #[serde(default)]
     pub deliveries: Vec<Delivery>,
+    #[serde(default)]
+    pub last_manual_probe: Option<ManualTest>,
+    #[serde(default)]
+    pub last_manual_mail: Option<ManualTest>,
     pub key_id: String,
     pub account_id: String,
     pub baseline: Sample,
@@ -158,4 +162,11 @@ pub struct Delivery {
     pub recipient: String,
     pub probe: SendStatus,
     pub mail: SendStatus,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ManualTest {
+    pub at: i64,
+    pub status: SendStatus,
+    pub recipient: Option<String>,
 }

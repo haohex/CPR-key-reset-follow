@@ -1,4 +1,4 @@
-//! 重置后邮件的配置校验与有界 SMTP 传输
+//! 自动通知与手动测试的邮件校验和有界 SMTP 传输
 use crate::{
     host::fault,
     model::{SmtpSecurity, SmtpSettings},
@@ -21,6 +21,9 @@ pub fn validate(settings: &SmtpSettings) -> Result<(), PluginFault> {
     if !settings.enabled {
         return Ok(());
     }
+    validate_connection(settings)
+}
+pub fn validate_connection(settings: &SmtpSettings) -> Result<(), PluginFault> {
     if settings.server.trim().is_empty() || settings.port == 0 {
         return Err(fault("请填写 SMTP 服务器和有效端口"));
     }
@@ -44,9 +47,10 @@ pub fn validate_recipient(recipient: &str) -> Result<(), PluginFault> {
 pub async fn send_email(
     settings: &SmtpSettings,
     recipient: &str,
+    subject: &str,
     body: &str,
 ) -> Result<(), PluginFault> {
-    validate(settings)?;
+    validate_connection(settings)?;
     let message = Message::builder()
         .from(
             settings
@@ -55,7 +59,7 @@ pub async fn send_email(
                 .map_err(|_| fault("发件地址格式不正确"))?,
         )
         .to(recipient.parse().map_err(|_| fault("收件地址格式不正确"))?)
-        .subject("CPR Key 周额度已重置")
+        .subject(subject)
         .body(body.to_owned())
         .map_err(|_| fault("邮件内容构建失败"))?;
     let builder = match settings.security {

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { DisplayTimezone, Link, Sample, SendStatus, SmtpSettings, Snapshot } from './api/modules/follow'
+import type { Link, Sample, SendStatus, SmtpSettings, Snapshot } from './api/modules/follow'
 import { BaseButton, BaseCheckbox, BaseIconButton, BaseInput, BaseModal, BaseSelect, BaseSwitch, BaseTag } from '@codex-proxy/ui'
 import { ArrowLeft, ChevronRight, Plus, RefreshCw, Settings } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { command, load } from './api/modules/follow'
-import { displayDate, money, percent, resolveTimezone, timezoneLabel } from './display'
+import { DISPLAY_TIMEZONE, displayDate, money, percent, timezoneLabel } from './display'
 
 const data = ref<Snapshot>()
 const busy = ref(false)
@@ -17,9 +17,9 @@ const preview = ref<Sample>()
 const previewError = ref('')
 const previewBusy = ref(false)
 const acknowledge = ref(false)
+const manualAcknowledge = ref(false)
 const settingsOpen = ref(false)
 const draftEarly = ref(true)
-const draftTimezone = ref<DisplayTimezone>('browser')
 const saved = ref(false)
 const draftPort = ref('587')
 const draftProbe = ref(false)
@@ -28,18 +28,12 @@ const draftRecipient = ref('')
 const draftSmtp = ref<SmtpSettings>({ enabled: false, server: '', port: 587, security: 'starttls', username: '', password: '', from: '' })
 const sendLabel = (status: SendStatus) => ({ skipped: '未启用', queued: '等待发送', unknown: '结果未知，可能已发送', succeeded: '成功', failed: '失败' })[status]
 const securityOptions = [{ value: 'starttls', label: 'STARTTLS' }, { value: 'tls', label: 'TLS' }]
-const timezones = [
-  { value: 'browser', label: '跟随浏览器' },
-  { value: 'Asia/Shanghai', label: '北京时间（UTC+8）' },
-  { value: 'UTC', label: 'UTC' },
-]
-const timezone = computed(() => resolveTimezone(data.value?.state.display_timezone || 'browser'))
-const timezoneText = computed(() => timezoneLabel(timezone.value))
-const draftTimezoneText = computed(() => timezoneLabel(resolveTimezone(draftTimezone.value)))
+const timezoneText = timezoneLabel(DISPLAY_TIMEZONE)
 const modalOpen = computed({ get: () => !!modal.value, set: (value) => {
   if (!value)
     modal.value = ''
 } })
+const smtpReady = computed(() => !!data.value?.state.smtp.server.trim() && !!data.value?.state.smtp.port && !!data.value?.state.smtp.from.trim())
 const rows = computed(() => Object.values(data.value?.state.links || {}))
 const link = computed(() => data.value?.state.links[selected.value])
 const account = (l: Link) => data.value?.accounts.find(a => a.account_id === l.account_id)
@@ -48,7 +42,7 @@ const observation = (l: Link) => data.value?.state.accounts[l.account_id]
 const sample = (l: Link) => observation(l)?.sample || l.baseline
 const budget = (l: Link) => data.value?.budgets[l.key_id]
 const keyName = (l: Link) => data.value?.keys.find(k => k.id === l.key_id)?.name || 'Key 已删除'
-const date = (value: number | null | undefined, full = false) => displayDate(value, timezone.value, full)
+const date = (value: number | null | undefined, full = false) => displayDate(value, DISPLAY_TIMEZONE, full)
 function status(l: Link): '监测中' | '等待确认' | '需处理' | '已暂停' {
   if (l.paused)
     return '已暂停'
@@ -66,7 +60,6 @@ function openSettings() {
   draftSmtp.value = { ...data.value!.state.smtp, port: data.value!.state.smtp?.port || 587, password: '' }
   draftPort.value = String(draftSmtp.value.port)
   draftEarly.value = data.value!.state.early_auto
-  draftTimezone.value = data.value!.state.display_timezone || 'browser'
   error.value = ''
   saved.value = false
   settingsOpen.value = true
@@ -84,7 +77,7 @@ async function saveSettings() {
   saved.value = false
   let committed = false
   try {
-    await command({ action: 'settings', version: data.value?.version, enabled: draftEarly.value, display_timezone: draftTimezone.value, probe_enabled: draftProbe.value, clear_smtp_password: clearSmtpPassword.value, smtp: { ...draftSmtp.value, port: Number(draftPort.value) } })
+    await command({ action: 'settings', version: data.value?.version, enabled: draftEarly.value, probe_enabled: draftProbe.value, clear_smtp_password: clearSmtpPassword.value, smtp: { ...draftSmtp.value, port: Number(draftPort.value) } })
     committed = true
     data.value = await load()
     saved.value = true
@@ -100,7 +93,7 @@ async function saveSettings() {
   }
   finally { busy.value = false }
 }
-watch([draftEarly, draftTimezone, draftProbe, draftSmtp, draftPort, clearSmtpPassword], () => {
+watch([draftEarly, draftProbe, draftSmtp, draftPort, clearSmtpPassword], () => {
   saved.value = false
 }, { deep: true })
 async function refresh() {
@@ -136,6 +129,30 @@ async function act(action: string, extra: object = {}, close = true) {
   }
   catch (e) { error.value = (e as Error).message }
   finally { busy.value = false }
+}
+function confirmManual(probe: boolean) {
+  manualAcknowledge.value = false
+  error.value = ''
+  modal.value = probe ? 'manual_probe' : 'manual_mail'
+}
+async function sendManual() {
+  if (busy.value || !manualAcknowledge.value)
+    return
+  busy.value = true
+  error.value = ''
+  let failure = ''
+  try {
+    await command({ action: modal.value, key_id: selected.value, version: data.value?.version, acknowledge: manualAcknowledge.value })
+  }
+  catch (e) { failure = (e as Error).message }
+  try {
+    data.value = await load()
+  }
+  catch (e) { failure = `${failure ? `${failure}；` : ''}无法刷新测试记录：${(e as Error).message}，请刷新查看持久结果，勿直接重复发送` }
+  error.value = failure
+  modal.value = 'detail'
+  manualAcknowledge.value = false
+  busy.value = false
 }
 let previewGeneration = 0
 watch(accountId, async (id) => {
@@ -193,16 +210,6 @@ onUnmounted(() => clearInterval(timer))
           </div>
           <BaseSwitch v-model="draftEarly" label="提前重置时自动重置额度" :disabled="busy" />
         </section>
-        <section class="setting-row timezone-setting">
-          <div>
-            <h3>显示时区</h3><p class="muted">
-              仅影响页面上的时间显示，不改变额度重置时间
-            </p>
-          </div>
-          <div class="timezone-input">
-            <BaseSelect v-model="draftTimezone" :options="timezones" :disabled="busy" aria-label="显示时区" /><small>当前显示：{{ draftTimezoneText }}</small>
-          </div>
-        </section>
         <section class="setting-row">
           <div>
             <h3>重置后发送测试消息</h3><p class="muted">
@@ -230,6 +237,9 @@ onUnmounted(() => clearInterval(timer))
         </section>
         <p v-if="error" role="alert" class="error">
           {{ error }}
+        </p>
+        <p class="muted">
+          保存设置后，到关联详情发送测试消息或测试邮件
         </p>
         <div class="settings-actions">
           <span v-if="saved" role="status" class="saved">设置已保存</span>
@@ -314,14 +324,14 @@ onUnmounted(() => clearInterval(timer))
       </table>
     </template>
   </main>
-  <BaseModal v-model="modalOpen" :title="({ add: '添加关联', detail: '关联详情', process: '处理关联', delete: '删除关联' })[modal] || '关联'" :dismissible="!busy" :draggable="false">
+  <BaseModal v-model="modalOpen" :title="({ add: '添加关联', detail: '关联详情', process: '处理关联', delete: '删除关联', manual_probe: '发送测试消息', manual_mail: '发送测试邮件' })[modal] || '关联'" :dismissible="!busy" :draggable="false">
     <p v-if="error" role="alert" class="error">
       {{ error }}
     </p>
     <template v-if="modal === 'add'">
       <label class="field">Key<BaseSelect v-model="keyId" :options="keys" filterable placeholder="选择现有 Key" :disabled="busy" /></label>
-      <p v-if="keyId && Number(data?.budgets[keyId]?.weekly_limit_usd) === 0" class="muted">
-        该 Key 未设周限额，清零无实际作用
+      <p v-if="keyId && data?.budgets[keyId] && Number(data.budgets[keyId].weekly_limit_usd) === 0 && Number(data.budgets[keyId].daily_limit_usd) === 0" class="muted">
+        该 Key 未设日限额和周限额，清零无实际作用
       </p>
       <label class="field">额度来源账号<BaseSelect v-model="accountId" :options="accounts" filterable placeholder="选择账号名称或邮箱" :disabled="busy" /></label>
       <p v-if="previewBusy" role="status">
@@ -342,8 +352,38 @@ onUnmounted(() => clearInterval(timer))
       </p><p v-else>
         无法读取预算
       </p>
+      <h4>Key 今日用量</h4><p v-if="budget(link)">
+        {{ money(budget(link)!.daily_used_usd) }} / {{ Number(budget(link)!.daily_limit_usd) === 0 ? '不限额' : money(budget(link)!.daily_limit_usd) }}
+      </p>
       <dl><dt>Key 自身的周用量重置时间</dt><dd>{{ budget(link)?.weekly_resets_at_ms ? date(budget(link)!.weekly_resets_at_ms, true) : '尚未开启或已到期' }}</dd></dl><p class="muted">
         由宿主独立计算，可能早于账号重置；这不是 Key 失效时间
+      </p>
+      <h4>手动测试</h4>
+      <p class="muted">
+        立即使用已保存的配置发送，不清零额度；自动开关关闭或关联暂停时也可测试
+      </p>
+      <div class="tools">
+        <BaseButton :disabled="busy" @click="confirmManual(true)">
+          发送测试消息
+        </BaseButton>
+        <BaseButton :disabled="busy || !smtpReady || !link.recipient || draftRecipient.trim() !== link.recipient" @click="confirmManual(false)">
+          发送测试邮件
+        </BaseButton>
+      </div>
+      <p v-if="!smtpReady" class="muted">
+        请先在设置中保存 SMTP 服务器、端口和发件地址
+      </p>
+      <p v-if="draftRecipient.trim() !== link.recipient" class="muted">
+        收件邮箱已修改，请先保存邮箱再测试邮件
+      </p>
+      <p v-else-if="!link.recipient" class="muted">
+        请先保存收件邮箱和 SMTP 设置再测试邮件
+      </p>
+      <p v-if="link.last_manual_probe" role="status">
+        最近手动消息：{{ date(link.last_manual_probe.at) }} · {{ link.last_manual_probe.status === 'succeeded' ? '已确认成功' : '未确认成功，可能已发送，不自动重试' }}
+      </p>
+      <p v-if="link.last_manual_mail" role="status">
+        最近手动邮件：{{ date(link.last_manual_mail.at) }} · {{ link.last_manual_mail.recipient }} · {{ link.last_manual_mail.status === 'succeeded' ? '已确认成功' : '未确认成功，可能已发送，不自动重试' }}
       </p>
       <h4>重置后通知</h4>
       <label class="field">收件邮箱<BaseInput v-model="draftRecipient" type="email" :disabled="busy" /></label>
@@ -372,7 +412,7 @@ onUnmounted(() => clearInterval(timer))
         <summary>判定与诊断</summary><p>窗口 codex:604800s · 604800 秒</p><p>已确认周期结束 {{ date(link.baseline.reset, true) }}</p><p>最近样本 {{ date(sample(link).observed, true) }}</p><p v-if="link.pending">
           待处理原因 {{ link.pending.reason }}
         </p><p v-if="link.pending?.before">
-          重置前周用量 ${{ link.pending.before.weekly_used_usd }}
+          重置前日用量 ${{ link.pending.before.daily_used_usd }} · 周用量 ${{ link.pending.before.weekly_used_usd }}
         </p><p v-if="budget(link)">
           完整金额：${{ budget(link)!.weekly_used_usd }} / {{ Number(budget(link)!.weekly_limit_usd) === 0 ? '不限额' : `$${budget(link)!.weekly_limit_usd}` }}
         </p><p>{{ link.pending?.error || observation(link)?.error }}</p>
@@ -384,6 +424,18 @@ onUnmounted(() => clearInterval(timer))
           删除关联
         </BaseButton>
       </div>
+    </template>
+    <template v-else-if="link && ['manual_probe', 'manual_mail'].includes(modal)">
+      <p v-if="modal === 'manual_probe'">
+        将使用 {{ keyName(link) }} 和关联账号向 gpt-6.1-sol 发送 hello，思考强度沿用默认，正常计费
+      </p>
+      <p v-else>
+        将使用已保存的 SMTP 配置向 {{ link.recipient }} 发送一封 SMTP测试邮件
+      </p>
+      <p class="muted">
+        本操作不清零额度；结果未知时不会自动重试，再次发送可能重复计费或投递
+      </p>
+      <BaseCheckbox v-model="manualAcknowledge" show-label label="确认立即发送，并了解重复发送的风险" :disabled="busy" />
     </template>
     <template v-else-if="link && modal === 'process'">
       <h3>{{ keyName(link) }}</h3><p class="muted">
@@ -405,7 +457,7 @@ onUnmounted(() => clearInterval(timer))
       </template>
       <template v-else-if="link.pending?.kind === 'confirm'">
         <p>{{ link.pending.reason === 'early' ? '账号提前进入新周期，自动清零开关已关闭' : '周期边界变化无法解释，需要你确认' }}</p><dl><dt>原边界</dt><dd>{{ date(link.baseline.reset, true) }}</dd><dt>新边界</dt><dd>{{ date(link.pending.sample.reset, true) }}</dd><dt>推算的新窗口起点</dt><dd>{{ date(link.pending.sample.reset - 604800000, true) }}</dd></dl><p class="muted">
-          确认后会清零当前周用量，此操作无法撤销
+          确认后会同时清零当前日用量和周用量，此操作无法撤销
         </p>
       </template>
       <p v-else>
@@ -418,6 +470,9 @@ onUnmounted(() => clearInterval(timer))
     <template #footer>
       <span v-if="modal === 'add'" class="muted">仅建立基线，不清零</span><BaseButton :disabled="busy" @click="modal = ''">
         {{ modal === 'detail' ? '关闭' : '取消' }}
+      </BaseButton>
+      <BaseButton v-if="['manual_probe', 'manual_mail'].includes(modal)" variant="primary" :loading="busy" :disabled="!manualAcknowledge || busy" @click="sendManual">
+        确认发送
       </BaseButton>
       <BaseButton v-if="modal === 'add'" variant="primary" :loading="busy" :disabled="!keyId || !preview || previewBusy" @click="act('add', { key_id: keyId, account_id: accountId })">
         添加

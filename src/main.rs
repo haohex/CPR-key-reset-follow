@@ -88,7 +88,7 @@ fn registration() -> ManagementRegistration {
         pages: vec![ManagementPage {
             id: "follow".into(),
             title: "Key 周额度跟随账号重置".into(),
-            description: Some("确认账号新周期后清零关联 Key 周预算".into()),
+            description: Some("确认账号新周期后同步清零关联 Key 日、周用量".into()),
             entry: "web/index.html".into(),
             icon: None,
         }],
@@ -145,6 +145,17 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
                     .ok_or_else(|| fault("关联不存在"))?
                     .recipient = recipient;
                 engine.save().await?;
+            }
+            "manual_probe" | "manual_mail" => {
+                engine
+                    .manual_test(
+                        key,
+                        cmd.action == "manual_probe",
+                        cmd.acknowledge,
+                        cmd.version,
+                        now(),
+                    )
+                    .await?;
             }
             "retry_probe" | "retry_mail" => {
                 engine

@@ -2,7 +2,7 @@
 use crate::{
     cycle::{self, Decision, Sample},
     host::{Host, fault},
-    model::{Delivery, Link, Pending, Phase, SendStatus, State},
+    model::{Delivery, Link, ManualTest, Pending, Phase, SendStatus, State},
 };
 use gateway_plugin_sdk::PluginFault;
 
@@ -46,6 +46,8 @@ impl<'a, H: Host> Engine<'a, H> {
         self.state.links.insert(
             key.into(),
             Link {
+                last_manual_probe: None,
+                last_manual_mail: None,
                 recipient: String::new(),
                 deliveries: vec![],
                 key_id: key.into(),
@@ -412,14 +414,23 @@ impl<'a, H: Host> Engine<'a, H> {
                     .unwrap_or_else(|_| "关联 Key".into());
                 let reset_time =
                     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(job.reset_at)
-                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        .and_then(|t| {
+                            chrono::FixedOffset::east_opt(8 * 3600)
+                                .map(|offset| t.with_timezone(&offset))
+                        })
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC+8").to_string())
                         .unwrap_or_else(|| "时间不可用".into());
                 let body = format!(
-                    "Key：{name}\n周额度已重置\n重置时间：{reset_time}\n模型测试：{}\n",
+                    "Key：{name}\n日额度和周额度已同步重置\n重置时间：{reset_time}\n模型测试：{}\n",
                     job.probe.label()
                 );
                 self.host
-                    .email(&self.state.smtp, &job.recipient, &body)
+                    .email(
+                        &self.state.smtp,
+                        &job.recipient,
+                        "CPR Key 日、周额度已重置",
+                        &body,
+                    )
                     .await
             })
             .await
@@ -431,6 +442,86 @@ impl<'a, H: Host> Engine<'a, H> {
                 d.probe = SendStatus::Succeeded;
             } else {
                 d.mail = SendStatus::Succeeded;
+            }
+        }
+        self.save().await
+    }
+    pub async fn manual_test(
+        &mut self,
+        key: &str,
+        probe: bool,
+        acknowledge: bool,
+        expected_version: Option<u64>,
+        now: i64,
+    ) -> Result<(), PluginFault> {
+        if expected_version != self.version {
+            return Err(fault("页面状态已变化，请刷新后重试"));
+        }
+        if !acknowledge {
+            return Err(fault("请确认测试会实际发送，重复操作可能重复计费或投递"));
+        }
+        let link = self
+            .state
+            .links
+            .get(key)
+            .ok_or_else(|| fault("关联不存在"))?;
+        let account = link.account_id.clone();
+        let recipient = link.recipient.clone();
+        if !probe {
+            crate::delivery::validate_connection(&self.state.smtp)?;
+            if recipient.is_empty() {
+                return Err(fault("请先保存该关联的收件邮箱"));
+            }
+            crate::delivery::validate_recipient(&recipient)?;
+        }
+        let record = ManualTest {
+            at: now,
+            status: SendStatus::Unknown,
+            recipient: (!probe).then_some(recipient.clone()),
+        };
+        let link = self
+            .state
+            .links
+            .get_mut(key)
+            .ok_or_else(|| fault("关联不存在"))?;
+        if probe {
+            link.last_manual_probe = Some(record);
+        } else {
+            link.last_manual_mail = Some(record);
+        }
+        // 精确版本写入意图后才发出一次，维护不会领取手动测试记录
+        self.save().await?;
+        let result = if probe {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(20),
+                self.host.probe(key, &account),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                self.host.email(
+                    &self.state.smtp,
+                    &recipient,
+                    "CPR SMTP测试",
+                    "这是一封由管理员手动发送的 SMTP测试邮件，用于验证已保存的邮件配置与收件地址",
+                ),
+            )
+            .await
+        };
+        if matches!(result, Ok(Ok(()))) {
+            let link = self
+                .state
+                .links
+                .get_mut(key)
+                .ok_or_else(|| fault("关联不存在"))?;
+            let record = if probe {
+                &mut link.last_manual_probe
+            } else {
+                &mut link.last_manual_mail
+            };
+            if let Some(record) = record {
+                record.status = SendStatus::Succeeded;
             }
         }
         self.save().await

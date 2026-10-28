@@ -22,6 +22,7 @@ struct Storage {
     mails: Vec<String>,
     fail_probe: bool,
     fail_mail: bool,
+    expect_manual: bool,
     refreshes: usize,
     time: i64,
     reset_at: i64,
@@ -48,10 +49,18 @@ impl Fake {
 impl Host for Fake {
     async fn probe(&self, key: &str, _account: &str) -> Result<(), PluginFault> {
         let mut s = self.0.lock().unwrap();
-        assert_eq!(
-            s.state.links[key].deliveries.last().unwrap().probe,
-            key_reset_follow::model::SendStatus::Unknown
-        );
+        let link = &s.state.links[key];
+        if s.expect_manual {
+            assert_eq!(
+                link.last_manual_probe.as_ref().unwrap().status,
+                key_reset_follow::model::SendStatus::Unknown
+            );
+        } else {
+            assert_eq!(
+                link.deliveries.last().unwrap().probe,
+                key_reset_follow::model::SendStatus::Unknown
+            );
+        }
         s.probes.push(key.into());
         if s.fail_probe {
             Err(fault("response lost"))
@@ -63,10 +72,25 @@ impl Host for Fake {
         &self,
         _settings: &key_reset_follow::model::SmtpSettings,
         recipient: &str,
+        subject: &str,
         body: &str,
     ) -> Result<(), PluginFault> {
-        assert!(body.contains("周额度已重置"));
+        if subject == "CPR SMTP测试" {
+            assert!(body.contains("SMTP测试") && !body.contains("已重置"));
+        } else {
+            assert_eq!(subject, "CPR Key 日、周额度已重置");
+            assert!(body.contains("日额度和周额度已同步重置"));
+        }
         let mut s = self.0.lock().unwrap();
+        if s.expect_manual {
+            assert_eq!(subject, "CPR SMTP测试");
+            assert!(s.state.links.values().any(|l| {
+                l.last_manual_mail.as_ref().is_some_and(|m| {
+                    m.status == key_reset_follow::model::SendStatus::Unknown
+                        && m.recipient.as_deref() == Some(recipient)
+                })
+            }));
+        }
         s.mails.push(recipient.into());
         if s.fail_mail {
             Err(fault("mail response lost"))
@@ -929,4 +953,228 @@ async fn lost_mail_completion_write_does_not_replay_smtp_send() {
         Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
     }
     assert_eq!(h.0.lock().unwrap().mails, ["a@example.com"]);
+}
+
+async fn manual_setup(h: &Fake) {
+    setup(h).await;
+    let mut e = Engine::load(h).await.unwrap();
+    e.state.smtp.server = "smtp.example.com".into();
+    e.state.smtp.port = 587;
+    e.state.smtp.from = "sender@example.com".into();
+    e.state.links.get_mut("key-a").unwrap().recipient = "saved@example.com".into();
+    e.state.links.get_mut("key-a").unwrap().paused = true;
+    e.state
+        .links
+        .get_mut("key-a")
+        .unwrap()
+        .deliveries
+        .push(key_reset_follow::model::Delivery {
+            id: 99,
+            reset_at: 123,
+            recipient: "original@example.com".into(),
+            probe: key_reset_follow::model::SendStatus::Queued,
+            mail: key_reset_follow::model::SendStatus::Queued,
+        });
+    e.save().await.unwrap();
+    h.0.lock().unwrap().expect_manual = true;
+}
+#[tokio::test]
+async fn manual_tests_are_immediate_independent_and_do_not_touch_reset_state() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    manual_setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    let baseline = serde_json::to_value(&e.state.links["key-a"]).unwrap();
+    let refreshes = h.0.lock().unwrap().refreshes;
+    let version = e.version;
+    e.manual_test("key-a", true, true, version, 2000)
+        .await
+        .unwrap();
+    let version = e.version;
+    e.manual_test("key-a", false, true, version, 3000)
+        .await
+        .unwrap();
+    let link = &e.state.links["key-a"];
+    assert_eq!(
+        link.last_manual_probe.as_ref().unwrap().status,
+        SendStatus::Succeeded
+    );
+    assert_eq!(link.last_manual_probe.as_ref().unwrap().at, 2000);
+    assert_eq!(
+        link.last_manual_mail.as_ref().unwrap().status,
+        SendStatus::Succeeded
+    );
+    assert_eq!(
+        link.last_manual_mail.as_ref().unwrap().recipient.as_deref(),
+        Some("saved@example.com")
+    );
+    let mut after = serde_json::to_value(link).unwrap();
+    after["last_manual_probe"] = serde_json::Value::Null;
+    after["last_manual_mail"] = serde_json::Value::Null;
+    assert_eq!(after, baseline);
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.probes, ["key-a"]);
+    assert_eq!(s.mails, ["saved@example.com"]);
+    assert_eq!(s.refreshes, refreshes);
+    assert!(s.resets.is_empty());
+    assert!(!s.state.probe_enabled && !s.state.smtp.enabled);
+}
+#[tokio::test]
+async fn manual_tests_reject_missing_confirmation_invalid_config_and_stale_version() {
+    let h = Fake::new();
+    manual_setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    let version = e.version;
+    assert!(
+        e.manual_test("key-a", true, false, version, 2000)
+            .await
+            .is_err()
+    );
+    assert!(
+        e.manual_test("key-a", true, true, None, 2000)
+            .await
+            .is_err()
+    );
+    e.state.smtp.port = 0;
+    assert!(
+        e.manual_test("key-a", false, true, version, 2000)
+            .await
+            .is_err()
+    );
+    e.state.smtp.port = 587;
+    e.state.links.get_mut("key-a").unwrap().recipient.clear();
+    assert!(
+        e.manual_test("key-a", false, true, version, 2000)
+            .await
+            .is_err()
+    );
+    let s = h.0.lock().unwrap();
+    assert!(s.probes.is_empty() && s.mails.is_empty());
+}
+#[tokio::test]
+async fn manual_errors_and_lost_completion_never_replay_on_maintenance() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    manual_setup(&h).await;
+    h.0.lock().unwrap().fail_probe = true;
+    let mut e = Engine::load(&h).await.unwrap();
+    let version = e.version;
+    e.manual_test("key-a", true, true, version, 2000)
+        .await
+        .unwrap();
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 2);
+    }
+    let version = e.version;
+    assert!(
+        e.manual_test("key-a", false, true, version, 3000)
+            .await
+            .is_err()
+    );
+    h.0.lock().unwrap().fail_save_at = None;
+    for _ in 0..3 {
+        let mut e = Engine::load(&h).await.unwrap();
+        e.drain(4000).await.unwrap();
+        e.deliver_one().await.unwrap();
+    }
+    let mut e = Engine::load(&h).await.unwrap();
+    assert_eq!(
+        e.state.links["key-a"]
+            .last_manual_probe
+            .as_ref()
+            .unwrap()
+            .status,
+        SendStatus::Unknown
+    );
+    assert_eq!(
+        e.state.links["key-a"]
+            .last_manual_mail
+            .as_ref()
+            .unwrap()
+            .status,
+        SendStatus::Unknown
+    );
+    h.0.lock().unwrap().fail_probe = false;
+    let version = e.version;
+    e.manual_test("key-a", true, true, version, 5000)
+        .await
+        .unwrap();
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.probes.len(), 2);
+    assert_eq!(s.mails.len(), 1);
+    assert!(s.resets.is_empty());
+    assert_eq!(
+        s.state.links["key-a"].last_manual_mail.as_ref().unwrap().at,
+        3000
+    );
+}
+#[tokio::test]
+async fn manual_intent_save_failure_does_not_send_and_legacy_link_is_readable() {
+    let h = Fake::new();
+    manual_setup(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    let mut old = serde_json::to_value(&e.state).unwrap();
+    for link in old["links"].as_object_mut().unwrap().values_mut() {
+        link.as_object_mut().unwrap().remove("last_manual_probe");
+        link.as_object_mut().unwrap().remove("last_manual_mail");
+    }
+    let old: State = serde_json::from_value(old).unwrap();
+    assert!(old.links["key-a"].last_manual_probe.is_none());
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 1);
+    }
+    let version = e.version;
+    assert!(
+        e.manual_test("key-a", true, true, version, 2000)
+            .await
+            .is_err()
+    );
+    assert!(h.0.lock().unwrap().probes.is_empty());
+}
+
+#[tokio::test]
+async fn manual_mail_error_and_probe_completion_loss_remain_independent_unknown_results() {
+    use key_reset_follow::model::SendStatus;
+    let h = Fake::new();
+    manual_setup(&h).await;
+    h.0.lock().unwrap().fail_mail = true;
+    let mut e = Engine::load(&h).await.unwrap();
+    let version = e.version;
+    e.manual_test("key-a", false, true, version, 2000)
+        .await
+        .unwrap();
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 2);
+    }
+    let version = e.version;
+    assert!(
+        e.manual_test("key-a", true, true, version, 3000)
+            .await
+            .is_err()
+    );
+    h.0.lock().unwrap().fail_save_at = None;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.deliver_one().await.unwrap();
+    assert_eq!(
+        e.state.links["key-a"]
+            .last_manual_probe
+            .as_ref()
+            .unwrap()
+            .status,
+        SendStatus::Unknown
+    );
+    assert_eq!(
+        e.state.links["key-a"]
+            .last_manual_mail
+            .as_ref()
+            .unwrap()
+            .status,
+        SendStatus::Unknown
+    );
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.mails.len(), 1);
+    assert_eq!(s.probes.len(), 1);
 }
