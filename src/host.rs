@@ -3,11 +3,11 @@ use crate::model::{SmtpSettings, State};
 use gateway_plugin_sdk::{
     ErrorCode, PluginFault,
     call::{
-        data::{QuotaFacts, QuotaFactsQuery},
+        data::{QuotaFacts, QuotaFactsQuery, VerifyClientRequest},
         host::{StateGetRequest, StateGetResult, StatePutRequest, StatePutResult},
         key_budgets::{BudgetPeriod, GetKeyBudgetRequest, KeyBudget, ResetKeyBudgetRequest},
     },
-    client::{HostClient, SessionError},
+    client::{HostClient, HttpBody, HttpFrame, HttpRequest, SessionError},
 };
 use std::future::Future;
 
@@ -23,6 +23,23 @@ pub fn fault(message: impl Into<String>) -> PluginFault {
     PluginFault::new(ErrorCode::Rejected, message)
 }
 pub trait Host: Sync {
+    fn verify_client(
+        &self,
+        _authorization: &str,
+    ) -> impl Future<Output = Result<String, PluginFault>> + Send {
+        async { Err(fault("此宿主未实现客户端认证")) }
+    }
+    fn reset_daily(&self, _key: &str) -> impl Future<Output = Result<(), PluginFault>> + Send {
+        async { Err(fault("此宿主未实现日限清零")) }
+    }
+    fn statistics(
+        &self,
+        _dimension: &str,
+        _start_ms: i64,
+        _end_ms: i64,
+    ) -> impl Future<Output = Result<crate::stats::DiagnosticCosts, PluginFault>> + Send {
+        async { Err(fault("此宿主未实现统计查询")) }
+    }
     fn probe(
         &self,
         _key: &str,
@@ -57,6 +74,65 @@ pub trait Host: Sync {
 }
 pub struct SdkHost(pub HostClient);
 impl Host for SdkHost {
+    async fn verify_client(&self, authorization: &str) -> Result<String, PluginFault> {
+        self.0
+            .verify_client(VerifyClientRequest {
+                authorization: authorization.into(),
+            })
+            .await
+            .map(|client| client.client_key_id)
+    }
+    async fn reset_daily(&self, key: &str) -> Result<(), PluginFault> {
+        self.0
+            .reset_key_budget(ResetKeyBudgetRequest {
+                client_key_id: key.into(),
+                period: BudgetPeriod::Daily,
+            })
+            .await
+            .map(|_| ())
+    }
+    async fn statistics(
+        &self,
+        dimension: &str,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<crate::stats::DiagnosticCosts, PluginFault> {
+        let format_time = |value| {
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(value)
+                .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+                .ok_or_else(|| fault("统计时间无效"))
+        };
+        if !matches!(dimension, "account" | "apiKey") {
+            return Err(fault("统计维度无效"));
+        }
+        let start = format_time(start_ms)?.replace(':', "%3A");
+        let end = format_time(end_ms)?.replace(':', "%3A");
+        let request = HttpRequest {
+            settings: serde_json::Value::Null,
+            method: "GET".into(),
+            uri: format!(
+                "/api/admin/usage/insights/diagnostics?dimension={dimension}&startTime={start}&endTime={end}"
+            ),
+            version: gateway_plugin_sdk::call::middleware::http::Version::Http11,
+            headers: vec![],
+            timeout_ms: Some(1_000),
+            body: HttpBody::empty(),
+        };
+        let mut response = self.0.dispatch_http(request).await?;
+        if response.status != 200 {
+            return Err(fault("统计接口不可用"));
+        }
+        let mut body = Vec::new();
+        while let Some(frame) = response.body.read().await? {
+            if let HttpFrame::Data(bytes) = frame {
+                if body.len().saturating_add(bytes.len()) > 1_048_576 {
+                    return Err(fault("统计响应过大"));
+                }
+                body.extend(bytes);
+            }
+        }
+        crate::stats::parse_diagnostics(&body)
+    }
     async fn key_name(&self, key: &str) -> Result<String, PluginFault> {
         let mut cursor = None;
         loop {

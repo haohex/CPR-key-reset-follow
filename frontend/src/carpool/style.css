@@ -1,0 +1,168 @@
+@import 'tailwindcss';
+@import '@codex-proxy/ui/tailwind.css';
+
+:root {
+  font-family: var(--cp-font-family, system-ui);
+  color: var(--cp-color-text);
+  background: var(--cp-color-bg-layout, #f8fafc);
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--cp-color-bg-layout, #f8fafc);
+  color: var(--cp-color-text);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.carpool-container {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.carpool-auth-box {
+  max-width: 440px;
+  margin: 60px auto 0;
+  padding: 0 16px;
+}
+
+.metric-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.metric-label {
+  font-size: 12px;
+  color: var(--cp-color-text-secondary);
+}
+
+.metric-value {
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value p {
+  margin: 0;
+}
+
+.progress-track {
+  width: 100%;
+  height: 6px;
+  border-radius: var(--cp-border-radius-full, 9999px);
+  background: var(--cp-color-fill-secondary);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.3s ease;
+}
+
+.progress--primary {
+  background: var(--cp-color-primary);
+}
+
+.progress--warning {
+  background: var(--cp-color-warning);
+}
+
+.progress--danger {
+  background: var(--cp-color-error);
+}
+
+.progress--neutral {
+  background: var(--cp-color-text-secondary);
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .grid-2col {
+    grid-template-columns: 1fr;
+  }
+}
+
+.muted {
+  color: var(--cp-color-text-secondary);
+}
+
+.error {
+  color: var(--cp-color-error-text);
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.success-text {
+  color: var(--cp-color-success-text, #10b981);
+  padding: 8px 0;
+  font-size: 13px;
+}
+
+.cycle-banner {
+  background: var(--cp-color-bg-container);
+  border: 1px solid var(--cp-color-border-secondary);
+  border-radius: var(--cp-border-radius, 8px);
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.share-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.share-item-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.share-item-percent {
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.card-action-box {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--cp-color-border-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.empty-stats {
+  padding: 24px 0;
+  text-align: center;
+}

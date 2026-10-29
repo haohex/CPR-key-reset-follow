@@ -34,6 +34,9 @@ struct Storage {
     fail_budget: Option<String>,
     weekly_used: BTreeMap<String, String>,
     used_percent: f64,
+    daily_resets: usize,
+    card_budget: Option<KeyBudget>,
+    lose_save_reply: bool,
 }
 struct Fake(Mutex<Storage>);
 impl Fake {
@@ -75,7 +78,18 @@ impl Host for Fake {
         subject: &str,
         body: &str,
     ) -> Result<(), PluginFault> {
-        if subject == "CPR SMTP测试" {
+        if subject == "CPR Key 日限重置卡已使用" {
+            let s = self.0.lock().unwrap();
+            assert!(
+                s.state
+                    .links
+                    .values()
+                    .any(|l| l.card_notices.iter().any(|n| {
+                        n.status == key_reset_follow::model::SendStatus::Unknown
+                            && n.recipient == recipient
+                    }))
+            );
+        } else if subject == "CPR SMTP测试" {
             assert!(body.contains("SMTP测试") && !body.contains("已重置"));
         } else {
             assert_eq!(subject, "CPR Key 日、周额度已重置");
@@ -110,6 +124,10 @@ impl Host for Fake {
         }
         s.version += 1;
         s.state = state.clone();
+        if s.lose_save_reply {
+            s.lose_save_reply = false;
+            return Err(fault("synthetic lost save reply"));
+        }
         Ok(s.version)
     }
     async fn refresh(&self, account: &str) -> Result<QuotaFacts, PluginFault> {
@@ -139,6 +157,9 @@ impl Host for Fake {
     async fn budget(&self, key: &str) -> Result<KeyBudget, PluginFault> {
         if self.0.lock().unwrap().fail_budget.as_deref() == Some(key) {
             return Err(fault("budget unavailable"));
+        }
+        if let Some(budget) = &self.0.lock().unwrap().card_budget {
+            return Ok(budget.clone());
         }
         Ok(KeyBudget {
             client_key_id: key.into(),
@@ -171,11 +192,393 @@ impl Host for Fake {
             Ok(())
         }
     }
+    async fn reset_daily(&self, key: &str) -> Result<(), PluginFault> {
+        let (hang, lost) = {
+            let mut s = self.0.lock().unwrap();
+            assert_eq!(
+                s.state.links[key].card.as_ref().unwrap().status,
+                key_reset_follow::model::CardStatus::Using
+            );
+            s.daily_resets += 1;
+            (s.hang_reset, s.lost_response.as_deref() == Some(key))
+        };
+        if hang {
+            std::future::pending::<()>().await;
+        }
+        if lost {
+            Err(fault("synthetic daily response lost"))
+        } else {
+            Ok(())
+        }
+    }
 }
 async fn setup(h: &Fake) {
     let mut e = Engine::load(h).await.unwrap();
     e.add("key-a", "account-a", 1000000).await.unwrap();
     e.add("key-b", "account-a", 1000000).await.unwrap();
+}
+
+async fn setup_card(h: &Fake) {
+    setup(h).await;
+    let mut e = Engine::load(h).await.unwrap();
+    e.state.smtp.enabled = true;
+    e.state.links.get_mut("key-a").unwrap().recipient = "member@example.test".into();
+    e.card_toggle("key-a", true, 1_000_000).await.unwrap();
+    h.0.lock().unwrap().card_budget = Some(KeyBudget {
+        client_key_id: "key-a".into(),
+        daily_limit_usd: "10".into(),
+        daily_used_usd: "2".into(),
+        weekly_limit_usd: "60".into(),
+        weekly_used_usd: "12".into(),
+        daily_resets_at_ms: None,
+        weekly_resets_at_ms: None,
+    });
+}
+
+#[tokio::test]
+async fn card_rejects_each_budget_and_link_guard_without_reset() {
+    for case in 0..6 {
+        let h = Fake::new();
+        setup_card(&h).await;
+        {
+            let mut s = h.0.lock().unwrap();
+            match case {
+                0 => s.card_budget.as_mut().unwrap().daily_limit_usd = "0".into(),
+                1 => s.card_budget.as_mut().unwrap().daily_used_usd = "0".into(),
+                2 => s.card_budget.as_mut().unwrap().weekly_used_usd = "60".into(),
+                3 => s.state.links.get_mut("key-a").unwrap().cycle_seq += 1,
+                4 => s.state.links.get_mut("key-a").unwrap().paused = true,
+                _ => s.state.links.get_mut("key-a").unwrap().card_enabled = false,
+            }
+        }
+        let mut e = Engine::load(&h).await.unwrap();
+        assert!(
+            matches!(
+                e.use_card("key-a", 1_000_001).await,
+                Err(key_reset_follow::card::UseError::Blocked(_))
+            ),
+            "case {case}"
+        );
+        let s = h.0.lock().unwrap();
+        assert_eq!(s.daily_resets, 0, "case {case}");
+        assert!(s.resets.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn card_success_calls_daily_once_and_mail_once_after_unknown_intent() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    assert_eq!(
+        e.use_card("key-a", 1_000_001).await.unwrap(),
+        key_reset_follow::card::UseResult::Used
+    );
+    assert!(e.use_card("key-a", 1_000_002).await.is_err());
+    e.deliver_one().await.unwrap();
+    Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.daily_resets, 1);
+    assert!(s.resets.is_empty());
+    assert_eq!(s.mails, ["member@example.test"]);
+    assert_eq!(
+        s.state.links["key-a"].card_notices[0].status,
+        key_reset_follow::model::SendStatus::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn card_error_and_real_timeout_remain_unknown_without_retry() {
+    for hang in [false, true] {
+        let h = Fake::new();
+        setup_card(&h).await;
+        {
+            let mut s = h.0.lock().unwrap();
+            s.hang_reset = hang;
+            s.lost_response = Some("key-a".into());
+            s.fail_mail = true;
+        }
+        let mut e = Engine::load(&h).await.unwrap();
+        assert_eq!(
+            e.use_card("key-a", 1_000_001).await.unwrap(),
+            key_reset_follow::card::UseResult::Unknown
+        );
+        drop(e);
+        let mut e = Engine::load(&h).await.unwrap();
+        assert!(e.use_card("key-a", 1_000_002).await.is_err());
+        e.deliver_one().await.unwrap();
+        Engine::load(&h).await.unwrap().deliver_one().await.unwrap();
+        let s = h.0.lock().unwrap();
+        assert_eq!(s.daily_resets, 1);
+        assert_eq!(s.mails.len(), 1);
+        assert_eq!(
+            s.state.links["key-a"].card_notices[0].status,
+            key_reset_follow::model::SendStatus::Unknown
+        );
+    }
+}
+
+#[tokio::test]
+async fn card_interrupted_call_and_failed_completion_recover_unknown() {
+    for interrupted in [false, true] {
+        let h = Fake::new();
+        setup_card(&h).await;
+        {
+            let mut s = h.0.lock().unwrap();
+            s.hang_reset = interrupted;
+            if !interrupted {
+                s.fail_save_at = Some(s.version + 2);
+            }
+        }
+        let mut e = Engine::load(&h).await.unwrap();
+        if interrupted {
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(10),
+                    e.use_card("key-a", 1_000_001)
+                )
+                .await
+                .is_err()
+            );
+        } else {
+            assert_eq!(
+                e.use_card("key-a", 1_000_001).await.unwrap(),
+                key_reset_follow::card::UseResult::Unknown
+            );
+        }
+        drop(e);
+        h.0.lock().unwrap().fail_save_at = None;
+        let mut e = Engine::load(&h).await.unwrap();
+        assert_eq!(
+            e.state.links["key-a"].card.as_ref().unwrap().status,
+            key_reset_follow::model::CardStatus::Unknown
+        );
+        assert!(e.use_card("key-a", 1_000_002).await.is_err());
+        assert_eq!(h.0.lock().unwrap().daily_resets, 1);
+    }
+}
+
+#[tokio::test]
+async fn card_pre_call_failures_preserve_available_and_never_reset() {
+    for case in 0..3 {
+        let h = Fake::new();
+        setup_card(&h).await;
+        {
+            let mut s = h.0.lock().unwrap();
+            match case {
+                0 => s.fail_budget = Some("key-a".into()),
+                1 => s.fail_save_at = Some(s.version + 1),
+                _ => s.lose_save_reply = true,
+            }
+        }
+        assert!(
+            Engine::load(&h)
+                .await
+                .unwrap()
+                .use_card("key-a", 1_000_001)
+                .await
+                .is_err()
+        );
+        let e = Engine::load(&h).await.unwrap();
+        assert_eq!(
+            e.state.links["key-a"].card.as_ref().unwrap().status,
+            key_reset_follow::model::CardStatus::Available,
+            "case {case}"
+        );
+        assert!(e.state.links["key-a"].card_notices.is_empty());
+        assert_eq!(h.0.lock().unwrap().daily_resets, 0);
+    }
+}
+
+#[tokio::test]
+async fn card_refund_requires_current_unknown_and_explicit_confirmation() {
+    use key_reset_follow::model::CardStatus;
+    for status in [CardStatus::Available, CardStatus::Used, CardStatus::Unknown] {
+        for current in [false, true] {
+            for acknowledged in [false, true] {
+                let h = Fake::new();
+                setup_card(&h).await;
+                let mut e = Engine::load(&h).await.unwrap();
+                let link = e.state.links.get_mut("key-a").unwrap();
+                link.card.as_mut().unwrap().status = status;
+                if !current {
+                    link.cycle_seq += 1;
+                }
+                let result = e.card_refund("key-a", acknowledged, 1_000_001).await;
+                assert_eq!(
+                    result.is_ok(),
+                    status == CardStatus::Unknown && current && acknowledged
+                );
+                assert_eq!(h.0.lock().unwrap().daily_resets, 0);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn card_cas_conflict_cannot_claim_or_overwrite_used_card() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    let mut stale = Engine::load(&h).await.unwrap();
+    Engine::load(&h)
+        .await
+        .unwrap()
+        .use_card("key-a", 1_000_001)
+        .await
+        .unwrap();
+    assert!(stale.use_card("key-a", 1_000_002).await.is_err());
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.daily_resets, 1);
+    assert_eq!(
+        s.state.links["key-a"].card.as_ref().unwrap().status,
+        key_reset_follow::model::CardStatus::Used
+    );
+}
+
+#[tokio::test]
+async fn card_lost_mail_completion_is_not_replayed_after_refund_or_new_cycle() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    h.0.lock().unwrap().lost_response = Some("key-a".into());
+    let mut e = Engine::load(&h).await.unwrap();
+    e.use_card("key-a", 1_000_001).await.unwrap();
+    {
+        let mut s = h.0.lock().unwrap();
+        s.fail_save_at = Some(s.version + 2);
+    }
+    assert!(e.deliver_one().await.is_err());
+    h.0.lock().unwrap().fail_save_at = None;
+    let mut e = Engine::load(&h).await.unwrap();
+    e.card_refund("key-a", true, 1_000_002).await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1_000).await.unwrap();
+    e.deliver_one().await.unwrap();
+    let s = h.0.lock().unwrap();
+    assert_eq!(s.mails.len(), 1);
+    assert_eq!(
+        s.state.links["key-a"].card_notices[0].status,
+        key_reset_follow::model::SendStatus::Unknown
+    );
+    assert_eq!(s.state.links["key-a"].cycle_seq, 1);
+}
+
+#[tokio::test]
+async fn card_lost_intent_reply_with_failed_rollback_stays_unknown() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    {
+        let mut s = h.0.lock().unwrap();
+        s.lose_save_reply = true;
+        s.fail_save_at = Some(s.version + 2);
+    }
+    assert!(
+        Engine::load(&h)
+            .await
+            .unwrap()
+            .use_card("key-a", 1_000_001)
+            .await
+            .is_err()
+    );
+    h.0.lock().unwrap().fail_save_at = None;
+    let mut e = Engine::load(&h).await.unwrap();
+    assert_eq!(
+        e.state.links["key-a"].card.as_ref().unwrap().status,
+        key_reset_follow::model::CardStatus::Unknown
+    );
+    assert!(e.use_card("key-a", 1_000_002).await.is_err());
+    assert_eq!(h.0.lock().unwrap().daily_resets, 0);
+}
+
+#[tokio::test]
+async fn card_cycle_events_advance_once_and_invalidate_old_card() {
+    for early in [false, true] {
+        for unknown in [false, true] {
+            let h = Fake::new();
+            setup_card(&h).await;
+            {
+                let mut s = h.0.lock().unwrap();
+                s.time = if early { WEEK / 2 } else { WEEK + 1_000 };
+                s.reset_at = if early { WEEK + WEEK / 2 } else { WEEK * 2 };
+                if unknown {
+                    s.lost_response = Some("key-a".into());
+                }
+            }
+            let now = h.0.lock().unwrap().time;
+            let mut e = Engine::load(&h).await.unwrap();
+            e.check("account-a", now).await.unwrap();
+            assert_eq!(e.state.links["key-a"].cycle_seq, 1);
+            assert_eq!(e.state.links["key-a"].card.as_ref().unwrap().seq, 1);
+            assert!(e.state.links["key-b"].card.is_none());
+            assert_eq!(e.state.links["key-b"].cycle_seq, 1);
+            if unknown {
+                e.action("key-a", "retry", true, now).await.unwrap();
+                assert_eq!(e.state.links["key-a"].cycle_seq, 1);
+                e.action("key-a", "skip", false, now).await.unwrap();
+                assert_eq!(e.state.links["key-a"].cycle_seq, 1);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn card_confirm_skip_advances_but_changed_skip_does_not() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    for reason in [
+        key_reset_follow::cycle::Decision::Early,
+        key_reset_follow::cycle::Decision::Unexplained,
+    ] {
+        let sample = e.state.links["key-a"].baseline.clone();
+        let before = e.state.links["key-a"].cycle_seq;
+        e.state.links.get_mut("key-a").unwrap().pending = Some(Pending::Confirm { sample, reason });
+        e.action("key-a", "skip", false, 1_000_001).await.unwrap();
+        assert_eq!(e.state.links["key-a"].cycle_seq, before + 1);
+    }
+    h.0.lock().unwrap().changed_window = true;
+    h.0.lock().unwrap().time = 1_000_002;
+    e.check("account-a", 1_000_002).await.unwrap();
+    assert!(matches!(
+        e.state.links["key-a"].pending,
+        Some(Pending::Changed { .. })
+    ));
+    h.0.lock().unwrap().changed_window = false;
+    e.action("key-a", "skip", false, 1_000_003).await.unwrap();
+    assert_eq!(e.state.links["key-a"].cycle_seq, 2);
+    assert!(h.0.lock().unwrap().resets.is_empty());
+}
+
+#[tokio::test]
+async fn card_toggle_pause_resume_and_settling_never_duplicate_issue() {
+    let h = Fake::new();
+    setup_card(&h).await;
+    let mut e = Engine::load(&h).await.unwrap();
+    let issued = e.state.links["key-a"].card.as_ref().unwrap().issued_at;
+    e.card_toggle("key-a", false, 1_000_001).await.unwrap();
+    e.card_toggle("key-a", true, 1_000_002).await.unwrap();
+    assert_eq!(
+        e.state.links["key-a"].card.as_ref().unwrap().issued_at,
+        issued
+    );
+    e.action("key-b", "pause", false, 1_000_003).await.unwrap();
+    e.card_toggle("key-b", true, 1_000_004).await.unwrap();
+    next(&h);
+    e.check("account-a", WEEK + 1_000).await.unwrap();
+    e.action("key-b", "resume", false, WEEK + 1_001)
+        .await
+        .unwrap();
+    assert_eq!(e.state.links["key-b"].cycle_seq, 0);
+    assert!(e.state.links["key-b"].card.is_none());
+    for now in [WEEK + 400_000, WEEK + 800_000] {
+        {
+            let mut s = h.0.lock().unwrap();
+            s.time = now;
+            s.reset_at = now + WEEK;
+        }
+        e.check("account-a", now).await.unwrap();
+    }
+    assert_eq!(e.state.links["key-a"].cycle_seq, 1);
+    assert_eq!(h.0.lock().unwrap().resets.len(), 1);
 }
 fn next(h: &Fake) {
     let mut s = h.0.lock().unwrap();

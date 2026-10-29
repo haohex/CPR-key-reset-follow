@@ -1,15 +1,20 @@
 //! 插件管理路由、会话与串行维护入口
+mod carpool;
 use gateway_plugin_sdk::{
     PluginFault,
     call::{
         host::{AuthListRequest, AuthListResult, KeyListRequest},
         management::*,
     },
-    client::{Empty, PluginBuilder, PluginSession, SessionConfig, TypedCall, TypedReply, methods},
+    client::{
+        Empty, HttpCall, PluginBuilder, PluginSession, SessionConfig, TypedCall, TypedReply,
+        methods,
+    },
 };
 use key_reset_follow::{
     engine::Engine,
     host::{Host, SdkHost, fault},
+    stats::ShareCache,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,6 +45,8 @@ struct Command {
     clear_smtp_password: bool,
     recipient: Option<String>,
     delivery_id: Option<u64>,
+    /// `card_toggle` 的目标开关值
+    card_enabled: Option<bool>,
     #[serde(default)]
     acknowledge: bool,
 }
@@ -87,15 +94,21 @@ fn registration() -> ManagementRegistration {
             .collect(),
         pages: vec![ManagementPage {
             id: "follow".into(),
-            title: "Key 周额度跟随账号重置".into(),
-            description: Some("确认账号新周期后同步清零关联 Key 日、周用量".into()),
+            title: "拼车一体化管理插件".into(),
+            description: Some(
+                "确认账号新周期后同步清零关联 Key 日、周用量，重置后可通过 SMTP 发送邮件通知"
+                    .into(),
+            ),
             entry: "web/index.html".into(),
             icon: None,
         }],
         callbacks: vec![],
     }
 }
-async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault> {
+async fn handle(
+    call: TypedCall<ManagementRequest>,
+    shares: &ShareCache,
+) -> Result<Value, PluginFault> {
     let host = SdkHost(call.host);
     let mut engine = Engine::load(&host).await?;
     if call.request.method == "POST" {
@@ -167,6 +180,21 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
                     )
                     .await?;
             }
+            "card_toggle" => {
+                engine
+                    .card_toggle(
+                        key,
+                        cmd.card_enabled.ok_or_else(|| fault("缺少卡开关值"))?,
+                        now(),
+                    )
+                    .await?
+            }
+            "card_refund" => engine.card_refund(key, cmd.acknowledge, now()).await?,
+            "card_notice_clear" => {
+                engine
+                    .card_notice_clear(key, cmd.version, cmd.acknowledge, now())
+                    .await?
+            }
             "check" => {
                 let account = engine
                     .state
@@ -234,19 +262,26 @@ async fn handle(call: TypedCall<ManagementRequest>) -> Result<Value, PluginFault
     let smtp_password_configured = !engine.state.smtp.password.is_empty();
     let state = public_state(&engine.state);
     Ok(
-        json!({"version": engine.version, "state": state, "smtp_password_configured": smtp_password_configured, "keys": keys, "accounts": accounts, "budgets": budgets}),
+        json!({"version": engine.version, "state": state, "smtp_password_configured": smtp_password_configured, "keys": keys, "accounts": accounts, "budgets": budgets, "shares":shares.snapshot()}),
     )
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lock = Arc::new(Mutex::new(()));
     let management_lock = lock.clone();
+    let member_lock = lock.clone();
+    let resources = Arc::new(carpool::Resources::load());
+    let limiter = Arc::new(carpool::Limiter::default());
+    let shares = Arc::new(ShareCache::default());
+    let management_shares = shares.clone();
+    let member_shares = shares.clone();
     let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
         .management(registration(), move |call| {
             let lock = management_lock.clone();
+            let shares = management_shares.clone();
             async move {
                 let _guard = lock.lock().await;
-                let (status, body) = match handle(call).await {
+                let (status, body) = match handle(call, &shares).await {
                     Ok(v) => (200, v),
                     Err(e) => (400, json!({"error": e.message})),
                 };
@@ -258,12 +293,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_payload(serde_json::to_vec(&body).unwrap()))
             }
         })?
+        .middleware(move |call: HttpCall| {
+            if !carpool::is_member_path(&call.request.uri) {
+                return Box::pin(async move { call.next.run(call.request).await })
+                    as std::pin::Pin<
+                        Box<dyn std::future::Future<Output = Result<_, PluginFault>> + Send>,
+                    >;
+            }
+            let lock = member_lock.clone();
+            let resources = resources.clone();
+            let limiter = limiter.clone();
+            let shares = member_shares.clone();
+            Box::pin(async move { Ok(carpool::run(call, lock, resources, limiter, shares).await) })
+        })?
         .on(methods::RECONCILE, move |call| {
             let lock = lock.clone();
+            let shares = shares.clone();
             async move {
-                let _guard = lock.lock().await;
-                tokio::time::timeout(std::time::Duration::from_secs(25), async {
-                    let host = SdkHost(call.host);
+                let guard = lock.lock().await;
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
+                let host = SdkHost(call.host);
+                let state = tokio::time::timeout_at(deadline, async {
                     let mut engine = Engine::load(&host).await?;
                     engine.deliver_one().await?;
                     engine.drain(now()).await?;
@@ -285,10 +335,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for (_, id) in due.into_iter().take(2) {
                         engine.check(&id, now()).await?;
                     }
-                    Ok(TypedReply::new(Empty {}))
+                    Ok::<_, PluginFault>(engine.state)
                 })
                 .await
-                .map_err(|_| fault("维护达到时间上限，未完成发送保持未知结果"))?
+                .map_err(|_| fault("维护达到时间上限，未完成发送保持未知结果"))??;
+                drop(guard);
+                let stats_deadline =
+                    deadline.min(tokio::time::Instant::now() + std::time::Duration::from_secs(2));
+                shares.refresh(&host, &state, now(), stats_deadline).await;
+                Ok(TypedReply::new(Empty {}))
             }
         })?
         .build()?;
