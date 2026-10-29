@@ -252,3 +252,115 @@ export function countCardNotices(notices?: { status: string }[] | null): { queue
 export function formatCardNoticeSummary(queued: number, unknown: number): string {
   return `等待发送 ${queued} 条 · 结果未知 ${unknown} 条`
 }
+
+export type TagType = 'default' | 'primary' | 'success' | 'info' | 'warning' | 'danger'
+
+export function tagType(tone: string | null | undefined): TagType {
+  if (tone === 'neutral' || !tone)
+    return 'default'
+  if (tone === 'primary' || tone === 'success' || tone === 'info' || tone === 'warning' || tone === 'danger')
+    return tone
+  return 'default'
+}
+
+export interface CreditsLike {
+  has_credits: boolean
+  unlimited: boolean
+  balance: string | null
+}
+
+export function formatCredits(credits: CreditsLike | null | undefined): string {
+  if (!credits)
+    return '暂无数据'
+  if (credits.unlimited)
+    return '无限'
+  if (!credits.has_credits)
+    return '无点数'
+  if (credits.balance != null && credits.balance.trim() !== '')
+    return credits.balance.trim()
+  return '暂无数据'
+}
+
+export function formatResetCardsAvailable(count: number | null | undefined): string {
+  return count == null ? '获取中' : `可用 ${count} 张`
+}
+
+export function sortResetCards<T extends { expires_at: number | null }>(
+  cards: T[] | null | undefined,
+): T[] {
+  if (!cards)
+    return []
+  return [...cards].sort((a, b) => {
+    if (a.expires_at == null && b.expires_at == null)
+      return 0
+    if (a.expires_at == null)
+      return 1
+    if (b.expires_at == null)
+      return -1
+    return a.expires_at - b.expires_at
+  })
+}
+
+export function formatResetCardTitle(title: string | null | undefined): string {
+  if (!title || !title.trim())
+    return '额度重置卡'
+  return title.trim()
+}
+
+export function formatResetCardStatus(status: string | null | undefined): string {
+  // 上游未给出状态时不能推断为可用，否则会与可用数量矛盾
+  if (!status?.trim())
+    return '状态未知'
+  switch (status) {
+    case 'available':
+      return '可用'
+    case 'used':
+      return '已使用'
+    case 'expired':
+      return '已到期'
+    default:
+      return status
+  }
+}
+
+export function resetCardStatusTone(status: string | null | undefined): TagType {
+  switch (status) {
+    case 'available':
+      return 'success'
+    case 'used':
+      return 'default'
+    case 'expired':
+      return 'danger'
+    default:
+      return 'default'
+  }
+}
+
+export function formatResetCardType(resetType: string | null | undefined): string {
+  if (!resetType)
+    return '额度重置'
+  switch (resetType) {
+    case 'weekly':
+      return '周重置'
+    case 'monthly':
+      return '月重置'
+    case 'daily':
+      return '日重置'
+    case 'yearly':
+      return '年重置'
+    default:
+      return resetType
+  }
+}
+
+export function formatResetCardsFailedHint(
+  failedAt: number | null | undefined,
+  resetCardsAt: number | null | undefined,
+  timezone = DISPLAY_TIMEZONE,
+): string | null {
+  if (failedAt == null)
+    return null
+  if (resetCardsAt != null)
+    return `最近一次获取失败，显示的是 ${displayDate(resetCardsAt, timezone, true)} 的结果`
+  return '获取失败，稍后自动重试'
+}

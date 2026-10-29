@@ -106,6 +106,40 @@ pub struct ShareStats {
     /// Key ID 到本周期花费；未出现在统计中的拼车 Key 视为 0
     pub keys: BTreeMap<String, String>,
 }
+/// 维护任务刷新的账号点数与重置卡，只存内存、只读展示，不写入私有状态
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub account_id: String,
+    /// 宿主已有观测中的点数；宿主没有点数事实时为 null
+    pub credits: Option<Credits>,
+    pub credits_at: Option<i64>,
+    /// 最近一次成功获取的上游重置卡；从未成功时为 null
+    pub reset_cards: Option<ResetCards>,
+    pub reset_cards_at: Option<i64>,
+    /// 最近一次获取重置卡失败的时间；成功后清空，失败时保留旧的 reset_cards
+    pub reset_cards_failed_at: Option<i64>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    /// 上游十进制文本，原样保留，不转为浮点
+    pub balance: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetCards {
+    pub available_count: u64,
+    pub cards: Vec<ResetCard>,
+}
+/// 不含上游卡 ID：插件只读展示，不提供消费入口
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetCard {
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub reset_type: Option<String>,
+    /// 毫秒时间戳，由页面按北京时间显示
+    pub expires_at: Option<i64>,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Phase {

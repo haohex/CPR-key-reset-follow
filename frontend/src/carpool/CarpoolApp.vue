@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import type { MemberView } from './api'
 import {
-  BaseButton,
-  BaseCard,
-  BaseCheckbox,
-  BaseFormItem,
-  BaseInput,
-  BasePageHeader,
-  BaseTag,
+  ZButton,
+  ZCard,
+  ZCheckbox,
+  ZFormItem,
+  ZInput,
+  ZPageHeader,
+  ZTag,
 } from '@codex-proxy/ui'
 import { LogOut, RefreshCw } from '@lucide/vue'
 import { computed, ref } from 'vue'
@@ -16,12 +16,21 @@ import {
   cardStatusTone,
   DISPLAY_TIMEZONE,
   displayDate,
+  formatCredits,
   formatCycleRange,
   formatMemberError,
+  formatResetCardsAvailable,
+  formatResetCardsFailedHint,
+  formatResetCardStatus,
+  formatResetCardTitle,
+  formatResetCardType,
   isSessionActive,
   money,
   percent,
+  resetCardStatusTone,
+  sortResetCards,
   sortShareItems,
+  tagType,
   usageRatio,
   usageTone,
 } from '../display'
@@ -43,6 +52,7 @@ const cycleText = computed(() => formatCycleRange(member.value?.cycle))
 const activeCard = computed(() => member.value?.card)
 const cardStatus = computed(() => cardStatusText(activeCard.value?.status, !!activeCard.value))
 const cardTone = computed(() => cardStatusTone(activeCard.value?.status, !!activeCard.value))
+const memberAccount = computed(() => member.value?.account)
 
 const sortedShares = computed(() => {
   if (!member.value?.shares)
@@ -170,54 +180,54 @@ async function handleUseCard() {
 <template>
   <main>
     <div v-if="!member" class="carpool-auth-box">
-      <BaseCard title="拼车成员登录" description="请输入你的 API Key 查看用量与日限重置卡">
+      <ZCard title="拼车成员登录" description="请输入你的 API Key 查看用量与日限重置卡">
         <form @submit.prevent="handleLogin">
-          <BaseFormItem label="API Key">
-            <BaseInput
+          <ZFormItem label="API Key">
+            <ZInput
               v-model="keyInput"
               type="password"
               autocomplete="off"
               placeholder="请输入你的 API Key"
               :disabled="loading"
             />
-          </BaseFormItem>
+          </ZFormItem>
           <p v-if="error" role="alert" class="error">
             {{ error }}
           </p>
           <div class="mt-4">
-            <BaseButton
-              variant="primary"
+            <ZButton
+              type="primary"
               class="w-full"
               :loading="loading"
               :disabled="!keyInput.trim() || loading"
               @click="handleLogin"
             >
               查看用量
-            </BaseButton>
+            </ZButton>
           </div>
           <p class="muted text-xs mt-3">
             Key 仅保存在当前页面内存中，用于查询与用卡，不写入本地存储。
           </p>
         </form>
-      </BaseCard>
+      </ZCard>
     </div>
 
     <div v-else class="carpool-container">
-      <BasePageHeader
+      <ZPageHeader
         title="拼车用量与重置卡"
         :description="`当前 Key：${member.key_name}`"
       >
         <template #actions>
           <div class="flex items-center gap-2">
-            <BaseButton size="sm" :disabled="loading || useCardBusy" @click="handleRefresh">
+            <ZButton size="small" :disabled="loading || useCardBusy" @click="handleRefresh">
               <RefreshCw :size="14" :class="{ 'animate-spin': loading }" />刷新
-            </BaseButton>
-            <BaseButton size="sm" :disabled="useCardBusy" @click="handleLogout">
+            </ZButton>
+            <ZButton size="small" :disabled="useCardBusy" @click="handleLogout">
               <LogOut :size="14" />退出
-            </BaseButton>
+            </ZButton>
           </div>
         </template>
-      </BasePageHeader>
+      </ZPageHeader>
 
       <div class="cycle-banner mt-4">
         <div class="metric-group">
@@ -225,9 +235,9 @@ async function handleUseCard() {
           <span class="font-medium text-sm">{{ cycleText }}</span>
         </div>
         <div v-if="member.paused">
-          <BaseTag type="neutral" size="sm">
+          <ZTag type="default" size="small">
             关联已暂停
-          </BaseTag>
+          </ZTag>
         </div>
       </div>
 
@@ -239,7 +249,7 @@ async function handleUseCard() {
       </p>
 
       <div class="grid-2col mt-4">
-        <BaseCard title="本人用量" padding="compact">
+        <ZCard title="本人用量" padding="compact">
           <div class="metric-group">
             <span class="metric-label">今日用量</span>
             <div class="metric-value">
@@ -283,15 +293,15 @@ async function handleUseCard() {
               />
             </div>
           </div>
-        </BaseCard>
+        </ZCard>
 
-        <BaseCard title="日限重置卡" padding="compact">
+        <ZCard title="日限重置卡" padding="compact">
           <div class="metric-group">
             <span class="metric-label">当前卡状态</span>
             <div class="metric-value mt-1">
-              <BaseTag :type="cardTone" size="sm">
+              <ZTag :type="tagType(cardTone)" size="small">
                 {{ cardStatus }}
-              </BaseTag>
+              </ZTag>
             </div>
           </div>
 
@@ -309,29 +319,97 @@ async function handleUseCard() {
           </div>
 
           <div class="card-action-box">
-            <BaseCheckbox
+            <ZCheckbox
               v-model="confirmUseCard"
-              show-label
               label="确认清零今日用量，此操作不可撤销"
               :disabled="!member.can_use_card || useCardBusy"
             />
-            <BaseButton
-              variant="primary"
+            <ZButton
+              type="primary"
               :loading="useCardBusy"
               :disabled="!member.can_use_card || !confirmUseCard || useCardBusy"
               @click="handleUseCard"
             >
               使用日限重置卡
-            </BaseButton>
+            </ZButton>
             <p v-if="!member.can_use_card && member.card_block_reason" class="muted text-xs">
               {{ member.card_block_reason }}
             </p>
           </div>
-        </BaseCard>
+        </ZCard>
       </div>
 
       <div class="mt-4">
-        <BaseCard title="同车占比" padding="compact">
+        <ZCard title="账号点数与重置卡" padding="compact" class="account-info-card">
+          <div class="account-info-grid">
+            <div class="metric-group">
+              <span class="metric-label">额度点数</span>
+              <div class="metric-value">
+                {{ formatCredits(memberAccount?.credits) }}
+              </div>
+              <p class="muted text-xs mt-1">
+                获取时间：{{ memberAccount?.credits_at ? displayDate(memberAccount.credits_at, DISPLAY_TIMEZONE, true) : '暂无时间' }}
+              </p>
+            </div>
+
+            <div class="metric-group">
+              <span class="metric-label">可用重置卡</span>
+              <div class="metric-value">
+                <ZTag v-if="memberAccount?.reset_cards" size="small" type="success">
+                  {{ formatResetCardsAvailable(memberAccount.reset_cards.available_count) }}
+                </ZTag>
+                <span v-else class="muted text-xs">
+                  获取中
+                </span>
+              </div>
+              <p class="muted text-xs mt-1">
+                获取时间：{{ memberAccount?.reset_cards_at ? displayDate(memberAccount.reset_cards_at, DISPLAY_TIMEZONE, true) : '暂无时间' }}
+              </p>
+            </div>
+          </div>
+
+          <div v-if="memberAccount?.reset_cards_failed_at" class="alert-box alert-warning mt-3">
+            <p>{{ formatResetCardsFailedHint(memberAccount.reset_cards_failed_at, memberAccount.reset_cards_at) }}</p>
+          </div>
+
+          <div class="reset-cards-section mt-3">
+            <span class="metric-label">重置卡列表</span>
+            <div v-if="!memberAccount?.reset_cards" class="muted text-xs mt-2" role="status">
+              {{ memberAccount?.reset_cards_failed_at ? '获取失败，稍后自动重试' : '获取中...' }}
+            </div>
+            <div v-else-if="!memberAccount.reset_cards.cards || memberAccount.reset_cards.cards.length === 0" class="muted text-xs mt-2">
+              暂无重置卡
+            </div>
+            <ul v-else class="reset-card-list mt-2">
+              <li
+                v-for="(c, idx) in sortResetCards(memberAccount.reset_cards.cards)"
+                :key="idx"
+                class="reset-card-item"
+              >
+                <div class="reset-card-info">
+                  <div class="reset-card-header">
+                    <span class="reset-card-title">{{ formatResetCardTitle(c.title) }}</span>
+                    <div class="reset-card-tags">
+                      <ZTag v-if="c.reset_type" size="small" type="default">
+                        {{ formatResetCardType(c.reset_type) }}
+                      </ZTag>
+                      <ZTag size="small" :type="resetCardStatusTone(c.status)">
+                        {{ formatResetCardStatus(c.status) }}
+                      </ZTag>
+                    </div>
+                  </div>
+                  <p class="reset-card-expiry">
+                    {{ c.expires_at ? `${displayDate(c.expires_at, DISPLAY_TIMEZONE, true)} 到期` : '无到期时间' }}
+                  </p>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </ZCard>
+      </div>
+
+      <div class="mt-4">
+        <ZCard title="同车占比" padding="compact">
           <div v-if="!member.shares" class="empty-stats">
             <p class="muted">
               统计生成中
@@ -354,9 +432,9 @@ async function handleUseCard() {
                 <div class="share-item-row">
                   <span class="share-item-label">
                     {{ item.label }}
-                    <BaseTag v-if="item.me" type="primary" size="sm">
+                    <ZTag v-if="item.me" type="primary" size="small">
                       我
-                    </BaseTag>
+                    </ZTag>
                   </span>
                   <span class="share-item-percent">
                     {{ percent(item.percent) }}
@@ -372,7 +450,7 @@ async function handleUseCard() {
               </div>
             </div>
           </template>
-        </BaseCard>
+        </ZCard>
       </div>
     </div>
   </main>

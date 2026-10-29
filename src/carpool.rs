@@ -4,6 +4,7 @@ use gateway_plugin_sdk::{
     client::{HttpBody, HttpCall, HttpResponse},
 };
 use key_reset_follow::{
+    account_info::AccountInfoCache,
     card::{self, UseError, UseResult},
     engine::Engine,
     host::{Host, SdkHost},
@@ -187,10 +188,18 @@ pub async fn run(
     resources: Arc<Resources>,
     limiter: Arc<Limiter>,
     shares: Arc<ShareCache>,
+    account_info: Arc<AccountInfoCache>,
 ) -> HttpResponse {
     match tokio::time::timeout(
         Duration::from_secs(15),
-        CatchPanic(Box::pin(handle(call, lock, resources, limiter, shares))),
+        CatchPanic(Box::pin(handle(
+            call,
+            lock,
+            resources,
+            limiter,
+            shares,
+            account_info,
+        ))),
     )
     .await
     {
@@ -205,6 +214,7 @@ async fn handle(
     resources: Arc<Resources>,
     limiter: Arc<Limiter>,
     shares: Arc<ShareCache>,
+    account_info: Arc<AccountInfoCache>,
 ) -> HttpResponse {
     let path = call.request.uri.split('?').next().unwrap_or("");
     if path == "/carpool" {
@@ -293,6 +303,9 @@ async fn handle(
             Err(UseError::Unavailable) => error(503, "服务暂不可用，请稍后重试"),
         };
     }
+    account_info.sync_accounts(&engine.state);
+    let member_account =
+        account_info.view_member(&engine.state.links[&key].account_id, crate::now());
     let state = engine.state;
     drop(guard);
     let link = &state.links[&key];
@@ -345,7 +358,7 @@ async fn handle(
         json!({
             "key_name": name, "paused":link.paused, "card_enabled":link.card_enabled, "card":current_card,
             "cycle":cycle, "budget":{"daily_used_usd":budget.daily_used_usd, "daily_limit_usd":budget.daily_limit_usd, "weekly_used_usd":budget.weekly_used_usd, "weekly_limit_usd":budget.weekly_limit_usd},
-            "can_use_card":reason.is_none(), "card_block_reason":reason, "shares":member_shares
+            "can_use_card":reason.is_none(), "card_block_reason":reason, "shares":member_shares, "account":member_account
         }),
     )
 }

@@ -4,6 +4,16 @@ export interface MemberCard { status: CardStatus, issued_at: number, used_at: nu
 export interface MemberBudget { daily_used_usd: string, daily_limit_usd: string, weekly_used_usd: string, weekly_limit_usd: string }
 export interface ShareItem { label: string, me: boolean, percent: number }
 export interface MemberShares { computed_at: number, items: ShareItem[], other_percent: number }
+export interface MemberCredits { has_credits: boolean, unlimited: boolean, balance: string | null }
+export interface MemberResetCard { title: string | null, status: string | null, reset_type: string | null, expires_at: number | null }
+// 关联账号的点数与上游重置卡，只读；缓存为空时整体为 null
+export interface MemberAccount {
+  credits: MemberCredits | null
+  credits_at: number | null
+  reset_cards: { available_count: number, cards: MemberResetCard[] } | null
+  reset_cards_at: number | null
+  reset_cards_failed_at: number | null
+}
 export interface MemberView {
   key_name: string
   paused: boolean
@@ -14,6 +24,7 @@ export interface MemberView {
   can_use_card: boolean
   card_block_reason: string | null
   shares: MemberShares | null
+  account: MemberAccount | null
 }
 export interface UseCardResult { result: 'used' | 'unknown', message: string }
 

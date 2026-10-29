@@ -9,14 +9,23 @@ import {
   DISPLAY_TIMEZONE,
   displayDate,
   formatCardNoticeSummary,
+  formatCredits,
   formatCycleRange,
   formatMemberError,
+  formatResetCardsAvailable,
+  formatResetCardsFailedHint,
+  formatResetCardStatus,
+  formatResetCardTitle,
+  formatResetCardType,
   isSessionActive,
   isShareStatsValid,
   money,
   percent,
   relativeReset,
+  resetCardStatusTone,
+  sortResetCards,
   sortShareItems,
+  tagType,
   timezoneLabel,
   usageRatio,
   usageTone,
@@ -230,4 +239,93 @@ it('卡邮件状态与未完成卡通知统计格式化正确', () => {
   assert.equal(emptyCounts.queued, 0)
   assert.equal(emptyCounts.unknown, 0)
   assert.equal(formatCardNoticeSummary(0, 0), '等待发送 0 条 · 结果未知 0 条')
+})
+
+it('账号点数展示规则：unlimited→无限，无点数，原样balance，null→暂无数据', () => {
+  assert.equal(formatCredits(null), '暂无数据')
+  assert.equal(formatCredits(undefined), '暂无数据')
+  assert.equal(formatCredits({ unlimited: true, has_credits: true, balance: null }), '无限')
+  assert.equal(formatCredits({ unlimited: true, has_credits: false, balance: '100' }), '无限')
+  assert.equal(formatCredits({ unlimited: false, has_credits: false, balance: '0' }), '无点数')
+  assert.equal(formatCredits({ unlimited: false, has_credits: true, balance: '125.50' }), '125.50')
+  assert.equal(formatCredits({ unlimited: false, has_credits: true, balance: '  999.00  ' }), '999.00')
+  assert.equal(formatCredits({ unlimited: false, has_credits: true, balance: null }), '暂无数据')
+  assert.equal(formatCredits({ unlimited: false, has_credits: true, balance: '   ' }), '暂无数据')
+})
+
+it('重置卡可用数量与标题、状态、类型展示规则', () => {
+  assert.equal(formatResetCardsAvailable(null), '获取中')
+  assert.equal(formatResetCardsAvailable(undefined), '获取中')
+  assert.equal(formatResetCardsAvailable(0), '可用 0 张')
+  assert.equal(formatResetCardsAvailable(2), '可用 2 张')
+
+  assert.equal(formatResetCardTitle(null), '额度重置卡')
+  assert.equal(formatResetCardTitle(''), '额度重置卡')
+  assert.equal(formatResetCardTitle('   '), '额度重置卡')
+  assert.equal(formatResetCardTitle('500次月重置卡'), '500次月重置卡')
+  assert.equal(formatResetCardTitle('  周重置卡  '), '周重置卡')
+
+  assert.equal(formatResetCardStatus('available'), '可用')
+  assert.equal(formatResetCardStatus('used'), '已使用')
+  assert.equal(formatResetCardStatus('expired'), '已到期')
+  assert.equal(formatResetCardStatus(null), '状态未知')
+  assert.equal(formatResetCardStatus(''), '状态未知')
+  assert.equal(resetCardStatusTone(null), 'default')
+  assert.equal(formatResetCardStatus('custom_status'), 'custom_status')
+
+  assert.equal(resetCardStatusTone('available'), 'success')
+  assert.equal(resetCardStatusTone('used'), 'default')
+  assert.equal(resetCardStatusTone('expired'), 'danger')
+  assert.equal(resetCardStatusTone('other'), 'default')
+
+  assert.equal(formatResetCardType('weekly'), '周重置')
+  assert.equal(formatResetCardType('monthly'), '月重置')
+  assert.equal(formatResetCardType('daily'), '日重置')
+  assert.equal(formatResetCardType('yearly'), '年重置')
+  assert.equal(formatResetCardType(null), '额度重置')
+  assert.equal(formatResetCardType('custom'), 'custom')
+})
+
+it('重置卡按到期升序排序且到期为 null 排在最后', () => {
+  const cards = [
+    { title: 'Card C', expires_at: null },
+    { title: 'Card B', expires_at: 2000 },
+    { title: 'Card A', expires_at: 1000 },
+    { title: 'Card D', expires_at: null },
+  ]
+  const sorted = sortResetCards(cards)
+  assert.equal(sorted[0].title, 'Card A')
+  assert.equal(sorted[1].title, 'Card B')
+  assert.equal(sorted[2].title, 'Card C')
+  assert.equal(sorted[3].title, 'Card D')
+
+  assert.deepEqual(sortResetCards(null), [])
+  assert.deepEqual(sortResetCards(undefined), [])
+})
+
+it('重置卡失败提示：有旧数据提示最近结果时间，无旧数据提示稍后重试', () => {
+  const failedAt = Date.parse('2026-10-28T12:00:00Z')
+  const resetCardsAt = Date.parse('2026-10-28T02:00:00Z')
+
+  assert.equal(formatResetCardsFailedHint(null, resetCardsAt), null)
+  assert.equal(formatResetCardsFailedHint(undefined, resetCardsAt), null)
+
+  const hintWithData = formatResetCardsFailedHint(failedAt, resetCardsAt, DISPLAY_TIMEZONE)
+  assert.equal(hintWithData, '最近一次获取失败，显示的是 2026/10/28 10:00（UTC+8） 的结果')
+
+  const hintWithoutData = formatResetCardsFailedHint(failedAt, null, DISPLAY_TIMEZONE)
+  assert.equal(hintWithoutData, '获取失败，稍后自动重试')
+})
+
+it('标签类型映射：neutral 映射为 default，其他合法值保留', () => {
+  assert.equal(tagType('neutral'), 'default')
+  assert.equal(tagType(null), 'default')
+  assert.equal(tagType(undefined), 'default')
+  assert.equal(tagType('primary'), 'primary')
+  assert.equal(tagType('success'), 'success')
+  assert.equal(tagType('warning'), 'warning')
+  assert.equal(tagType('danger'), 'danger')
+  assert.equal(tagType('info'), 'info')
+  assert.equal(tagType('default'), 'default')
+  assert.equal(tagType('unknown'), 'default')
 })

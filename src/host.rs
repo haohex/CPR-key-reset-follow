@@ -1,5 +1,5 @@
 //! 通过公开 SDK 与 SMTP 发送边界访问外部服务
-use crate::model::{SmtpSettings, State};
+use crate::model::{Credits, ResetCards, SmtpSettings, State};
 use gateway_plugin_sdk::{
     ErrorCode, PluginFault,
     call::{
@@ -22,7 +22,33 @@ pub fn reset_request(key: &str) -> ResetKeyBudgetRequest {
 pub fn fault(message: impl Into<String>) -> PluginFault {
     PluginFault::new(ErrorCode::Rejected, message)
 }
+fn encode_query_value(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut result = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            result.push(char::from(byte));
+        } else {
+            result.push('%');
+            result.push(char::from(HEX[usize::from(byte >> 4)]));
+            result.push(char::from(HEX[usize::from(byte & 15)]));
+        }
+    }
+    result
+}
 pub trait Host: Sync {
+    fn quota_credits(
+        &self,
+        _account: &str,
+    ) -> impl Future<Output = Result<Option<Credits>, PluginFault>> + Send {
+        async { Err(fault("此宿主未实现点数查询")) }
+    }
+    fn reset_cards(
+        &self,
+        _account: &str,
+    ) -> impl Future<Output = Result<ResetCards, PluginFault>> + Send {
+        async { Err(fault("此宿主未实现重置卡查询")) }
+    }
     fn verify_client(
         &self,
         _authorization: &str,
@@ -72,8 +98,53 @@ pub trait Host: Sync {
     fn budget(&self, key: &str) -> impl Future<Output = Result<KeyBudget, PluginFault>> + Send;
     fn reset(&self, key: &str) -> impl Future<Output = Result<(), PluginFault>> + Send;
 }
+
 pub struct SdkHost(pub HostClient);
 impl Host for SdkHost {
+    async fn quota_credits(&self, account: &str) -> Result<Option<Credits>, PluginFault> {
+        let details = self
+            .0
+            .quota_details(QuotaFactsQuery {
+                account_id: account.into(),
+            })
+            .await?;
+        if details.account_id != account {
+            return Err(fault("账号点数响应不匹配"));
+        }
+        Ok(details.credits.map(|credits| Credits {
+            has_credits: credits.has_credits,
+            unlimited: credits.unlimited,
+            balance: credits.balance,
+        }))
+    }
+    async fn reset_cards(&self, account: &str) -> Result<ResetCards, PluginFault> {
+        let request = HttpRequest {
+            settings: serde_json::Value::Null,
+            method: "GET".into(),
+            uri: format!(
+                "/api/admin/accounts/reset-credits?accountId={}",
+                encode_query_value(account)
+            ),
+            version: gateway_plugin_sdk::call::middleware::http::Version::Http11,
+            headers: vec![],
+            timeout_ms: Some(5_000),
+            body: HttpBody::empty(),
+        };
+        let mut response = self.0.dispatch_http(request).await?;
+        if response.status != 200 {
+            return Err(fault("重置卡接口不可用"));
+        }
+        let mut body = Vec::new();
+        while let Some(frame) = response.body.read().await? {
+            if let HttpFrame::Data(bytes) = frame {
+                if body.len().saturating_add(bytes.len()) > 1_048_576 {
+                    return Err(fault("重置卡响应过大"));
+                }
+                body.extend(bytes);
+            }
+        }
+        crate::account_info::parse_reset_cards(&body)
+    }
     async fn verify_client(&self, authorization: &str) -> Result<String, PluginFault> {
         self.0
             .verify_client(VerifyClientRequest {
@@ -239,5 +310,15 @@ impl Host for SdkHost {
             .reset_key_budget(reset_request(key))
             .await
             .map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_query_value;
+
+    #[test]
+    fn account_id_query_cannot_inject_extra_parameters() {
+        assert_eq!(encode_query_value("a /+中?&"), "a%20%2F%2B%E4%B8%AD%3F%26");
     }
 }

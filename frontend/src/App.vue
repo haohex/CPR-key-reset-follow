@@ -1,28 +1,52 @@
 <script setup lang="ts">
 import type { Link, Sample, SendStatus, SmtpSettings, Snapshot } from './api/modules/follow'
 import {
-  BaseButton,
-  BaseCard,
-  BaseCheckbox,
-  BaseEmpty,
-  BaseForm,
-  BaseFormItem,
-  BaseIconButton,
-  BaseInput,
-  BaseModal,
-  BasePageHeader,
-  BaseSegmented,
-  BaseSelect,
-  BaseSwitch,
-  BaseTag,
+  ZButton,
+  ZCard,
+  ZCheckbox,
+  ZDialog,
+  ZEmpty,
+  ZForm,
+  ZFormItem,
+  ZIconButton,
+  ZInput,
+  ZPageHeader,
+  ZSegmented,
+  ZSelect,
+  ZSwitch,
+  ZTag,
 } from '@codex-proxy/ui'
 import { AlertCircle, ArrowLeft, ChevronRight, Plus, RefreshCw, Settings } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { command, load } from './api/modules/follow'
-import { calculateSharePercent, cardMailStatusText, cardStatusText, cardStatusTone, countCardNotices, DISPLAY_TIMEZONE, displayDate, formatCardNoticeSummary, isShareStatsValid, money, percent, relativeReset, timezoneLabel, usageRatio, usageTone } from './display'
+import {
+  calculateSharePercent,
+  cardMailStatusText,
+  cardStatusText,
+  cardStatusTone,
+  countCardNotices,
+  DISPLAY_TIMEZONE,
+  displayDate,
+  formatCardNoticeSummary,
+  formatCredits,
+  formatResetCardsAvailable,
+  formatResetCardsFailedHint,
+  formatResetCardStatus,
+  formatResetCardTitle,
+  formatResetCardType,
+  isShareStatsValid,
+  money,
+  percent,
+  relativeReset,
+  resetCardStatusTone,
+  sortResetCards,
+  tagType,
+  timezoneLabel,
+  usageRatio,
+  usageTone,
+} from './display'
 
-type ModalSize = 'sm' | 'md' | 'md-wide' | 'lg' | 'xl'
-type ModalTone = 'neutral' | 'info' | 'warning' | 'danger' | 'success'
+type DialogType = 'default' | 'info' | 'warning' | 'danger' | 'success'
 
 const data = ref<Snapshot>()
 const busy = ref(false)
@@ -81,15 +105,15 @@ const modalTitle = computed(() => {
   return map[modal.value] || '关联'
 })
 
-const modalSize = computed<ModalSize>(() => {
+const modalWidth = computed(() => {
   if (modal.value === 'detail')
-    return 'lg'
+    return '48rem'
   if (modal.value === 'delete')
-    return 'sm'
-  return 'md'
+    return '28rem'
+  return '36rem'
 })
 
-const modalTone = computed<ModalTone>(() => {
+const modalType = computed<DialogType>(() => {
   if (modal.value === 'delete')
     return 'danger'
   if (modal.value === 'process') {
@@ -98,9 +122,9 @@ const modalTone = computed<ModalTone>(() => {
       return 'warning'
     if (k === 'unknown')
       return 'danger'
-    return 'neutral'
+    return 'default'
   }
-  return 'neutral'
+  return 'default'
 })
 
 const smtpReady = computed(() => !!data.value?.state.smtp.server.trim() && !!data.value?.state.smtp.port && !!data.value?.state.smtp.from.trim())
@@ -236,6 +260,7 @@ const isShareValid = computed(() => {
     return false
   return isShareStatsValid(currentShare.value, sample(link.value)?.reset, link.value.key_id)
 })
+const currentAccountInfo = computed(() => (link.value ? data.value?.account_info?.[link.value.account_id] : undefined))
 
 function openSettings() {
   clearSmtpPassword.value = false
@@ -389,16 +414,16 @@ onUnmounted(() => clearInterval(timer))
   <main class="panel">
     <template v-if="settingsOpen">
       <div class="settings-view">
-        <BasePageHeader title="插件设置" description="设置对所有管理员生效">
+        <ZPageHeader title="插件设置" description="设置对所有管理员生效">
           <template #actions>
-            <BaseButton :disabled="busy" @click="closeSettings">
+            <ZButton :disabled="busy" @click="closeSettings">
               <ArrowLeft :size="16" />返回关联列表
-            </BaseButton>
+            </ZButton>
           </template>
-        </BasePageHeader>
+        </ZPageHeader>
 
         <form class="settings-form" @submit.prevent="saveSettings">
-          <BaseCard title="自动重置" description="换周与提前重置的处理方式，以及重置后的测试消息" class="mb-5">
+          <ZCard title="自动重置" description="换周与提前重置的处理方式，以及重置后的测试消息" class="mb-5">
             <div class="setting-item">
               <div class="setting-item-text">
                 <h4>提前重置时自动重置额度</h4>
@@ -407,7 +432,7 @@ onUnmounted(() => clearInterval(timer))
                   关闭后需要手动确认；正常换周仍自动处理
                 </p>
               </div>
-              <BaseSwitch v-model="draftEarly" label="提前重置时自动重置额度" :disabled="busy" />
+              <ZSwitch v-model="draftEarly" label="提前重置时自动重置额度" :disabled="busy" />
             </div>
             <div class="setting-item-divider" />
             <div class="setting-item">
@@ -417,11 +442,11 @@ onUnmounted(() => clearInterval(timer))
                   使用关联 Key 和账号向 gpt-6.1-sol 发送 hello，沿用默认思考强度，正常计费
                 </p>
               </div>
-              <BaseSwitch v-model="draftProbe" label="重置后发送测试消息" :disabled="busy" />
+              <ZSwitch v-model="draftProbe" label="重置后发送测试消息" :disabled="busy" />
             </div>
-          </BaseCard>
+          </ZCard>
 
-          <BaseCard title="SMTP 邮件提醒" description="配置全局邮件服务，发信通知将经由此服务发出" class="mb-5">
+          <ZCard title="SMTP 邮件提醒" description="配置全局邮件服务，发信通知将经由此服务发出" class="mb-5">
             <div class="setting-item">
               <div class="setting-item-text">
                 <h4>启用邮件提醒</h4>
@@ -429,37 +454,37 @@ onUnmounted(() => clearInterval(timer))
                   收件邮箱在每个关联详情中设置；密码留空保留已保存值
                 </p>
               </div>
-              <BaseSwitch v-model="draftSmtp.enabled" label="启用邮件提醒" :disabled="busy" />
+              <ZSwitch v-model="draftSmtp.enabled" label="启用邮件提醒" :disabled="busy" />
             </div>
 
             <div class="smtp-grid">
-              <BaseFormItem label="服务器">
-                <BaseInput v-model="draftSmtp.server" :disabled="busy" />
-              </BaseFormItem>
-              <BaseFormItem label="端口">
-                <BaseInput v-model="draftPort" type="number" :disabled="busy" />
-              </BaseFormItem>
-              <BaseFormItem label="连接安全">
-                <BaseSelect v-model="draftSmtp.security" :options="securityOptions" :disabled="busy" class="smtp-select" />
-              </BaseFormItem>
-              <BaseFormItem label="用户名">
-                <BaseInput v-model="draftSmtp.username" :disabled="busy" autocomplete="off" />
-              </BaseFormItem>
-              <BaseFormItem label="密码">
-                <BaseInput v-model="draftSmtp.password" type="password" :disabled="busy" autocomplete="new-password" />
+              <ZFormItem label="服务器">
+                <ZInput v-model="draftSmtp.server" :disabled="busy" />
+              </ZFormItem>
+              <ZFormItem label="端口">
+                <ZInput v-model="draftPort" type="number" :disabled="busy" />
+              </ZFormItem>
+              <ZFormItem label="连接安全">
+                <ZSelect v-model="draftSmtp.security" :options="securityOptions" :disabled="busy" class="smtp-select" />
+              </ZFormItem>
+              <ZFormItem label="用户名">
+                <ZInput v-model="draftSmtp.username" :disabled="busy" autocomplete="off" />
+              </ZFormItem>
+              <ZFormItem label="密码">
+                <ZInput v-model="draftSmtp.password" type="password" :disabled="busy" autocomplete="new-password" />
                 <div class="password-meta">
                   <span class="muted">SMTP 密码：{{ data?.smtp_password_configured ? '已设置' : '未设置' }}</span>
-                  <BaseCheckbox v-model="clearSmtpPassword" show-label label="清除已保存的 SMTP 密码" :disabled="busy" />
+                  <ZCheckbox v-model="clearSmtpPassword" label="清除已保存的 SMTP 密码" :disabled="busy" />
                 </div>
-              </BaseFormItem>
-              <BaseFormItem label="发件地址">
-                <BaseInput v-model="draftSmtp.from" :disabled="busy" />
-              </BaseFormItem>
+              </ZFormItem>
+              <ZFormItem label="发件地址">
+                <ZInput v-model="draftSmtp.from" :disabled="busy" />
+              </ZFormItem>
             </div>
             <p class="muted mt-3">
               保存设置后，到关联详情发送测试消息或测试邮件
             </p>
-          </BaseCard>
+          </ZCard>
 
           <p v-if="error" role="alert" class="error">
             {{ error }}
@@ -467,12 +492,12 @@ onUnmounted(() => clearInterval(timer))
 
           <div class="settings-actions">
             <span v-if="saved" role="status" class="saved">设置已保存</span>
-            <BaseButton :disabled="busy" @click="closeSettings">
+            <ZButton :disabled="busy" @click="closeSettings">
               取消
-            </BaseButton>
-            <BaseButton variant="primary" :loading="busy" @click="saveSettings">
+            </ZButton>
+            <ZButton type="primary" :loading="busy" @click="saveSettings">
               保存设置
-            </BaseButton>
+            </ZButton>
           </div>
         </form>
       </div>
@@ -480,54 +505,54 @@ onUnmounted(() => clearInterval(timer))
 
     <template v-else>
       <p v-if="error && !modal" role="alert" class="error">
-        {{ error }} <BaseButton size="sm" @click="refresh">
+        {{ error }} <ZButton size="small" @click="refresh">
           重试
-        </BaseButton>
+        </ZButton>
       </p>
 
-      <BasePageHeader title="拼车一体化管理">
+      <ZPageHeader title="拼车一体化管理">
         <template #description>
           <span class="header-meta"><span class="count">{{ rows.length }} 个关联</span> · <small class="timezone-caption">时间：{{ timezoneText }}</small></span>
         </template>
         <template #actions>
-          <BaseIconButton label="刷新列表" title="刷新列表，不检查账号额度" :disabled="busy" @click="refresh">
+          <ZIconButton aria-label="刷新列表" title="刷新列表，不检查账号额度" :disabled="busy" @click="refresh">
             <RefreshCw :size="17" />
-          </BaseIconButton>
-          <BaseButton :disabled="busy || !data" @click="openSettings">
+          </ZIconButton>
+          <ZButton :disabled="busy || !data" @click="openSettings">
             <Settings :size="16" />设置
-          </BaseButton>
-          <BaseButton variant="primary" :disabled="busy || !data" @click="open('add')">
+          </ZButton>
+          <ZButton type="primary" :disabled="busy || !data" @click="open('add')">
             <Plus :size="16" />添加关联
-          </BaseButton>
+          </ZButton>
         </template>
-      </BasePageHeader>
+      </ZPageHeader>
 
       <div v-if="needs.length" class="banner" role="status">
         <div class="banner-title">
           <AlertCircle :size="18" class="banner-icon" />
           <span>{{ needs.length }} 个关联需要处理</span>
         </div>
-        <BaseButton size="sm" @click="open('process', needs[0])">
+        <ZButton size="small" @click="open('process', needs[0])">
           查看并处理
-        </BaseButton>
+        </ZButton>
       </div>
 
       <p v-if="!data && !error" class="empty" role="status">
         正在加载关联
       </p>
 
-      <BaseEmpty
+      <ZEmpty
         v-else-if="data && !rows.length"
         title="尚未建立关联"
         description="选择 Key 和对应账号，开始跟随周额度重置"
         surface="subtle"
       >
         <template #action>
-          <BaseButton variant="primary" :disabled="busy || !data" @click="open('add')">
+          <ZButton type="primary" :disabled="busy || !data" @click="open('add')">
             <Plus :size="16" />添加关联
-          </BaseButton>
+          </ZButton>
         </template>
-      </BaseEmpty>
+      </ZEmpty>
 
       <div v-else-if="data" class="table-container">
         <table class="data-table">
@@ -608,37 +633,37 @@ onUnmounted(() => clearInterval(timer))
               </td>
               <td data-label="状态" class="cell-status">
                 <div class="status-cell">
-                  <BaseTag :type="tone(l)" size="sm">
+                  <ZTag :type="tagType(tone(l))" size="small">
                     {{ status(l) }}
-                  </BaseTag>
-                  <BaseButton
+                  </ZTag>
+                  <ZButton
                     v-if="['等待确认', '需处理'].includes(status(l))"
-                    size="sm"
+                    size="small"
                     :disabled="busy"
                     @click="open('process', l)"
                   >
                     处理
-                  </BaseButton>
+                  </ZButton>
                 </div>
               </td>
               <td class="row-actions">
                 <div class="tools">
-                  <BaseIconButton
-                    label="立即检查"
+                  <ZIconButton
+                    aria-label="立即检查"
                     title="立即检查账号额度"
                     :disabled="busy || l.paused"
                     @click="selected = l.key_id; act('check')"
                   >
                     <RefreshCw :size="16" />
-                  </BaseIconButton>
-                  <BaseIconButton
-                    label="查看详情"
+                  </ZIconButton>
+                  <ZIconButton
+                    aria-label="查看详情"
                     title="查看详情"
                     :disabled="busy"
                     @click="open('detail', l)"
                   >
                     <ChevronRight :size="17" />
-                  </BaseIconButton>
+                  </ZIconButton>
                 </div>
               </td>
             </tr>
@@ -648,12 +673,14 @@ onUnmounted(() => clearInterval(timer))
     </template>
   </main>
 
-  <BaseModal
+  <ZDialog
     v-model="modalOpen"
     :title="modalTitle"
-    :size="modalSize"
-    :tone="modalTone"
-    :dismissible="!busy"
+    :width="modalWidth"
+    :type="modalType"
+    :show-close="!busy"
+    :close-on-click-modal="!busy"
+    :close-on-press-escape="!busy"
     :draggable="false"
   >
     <p v-if="error" role="alert" class="error">
@@ -662,17 +689,17 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 添加弹窗 -->
     <template v-if="modal === 'add'">
-      <BaseForm>
-        <BaseFormItem
+      <ZForm>
+        <ZFormItem
           label="Key"
           :description="keyId && data?.budgets[keyId] && Number(data.budgets[keyId].weekly_limit_usd) === 0 && Number(data.budgets[keyId].daily_limit_usd) === 0 ? '该 Key 未设日限额和周限额，清零无实际作用' : undefined"
         >
-          <BaseSelect v-model="keyId" :options="keys" filterable placeholder="选择现有 Key" :disabled="busy" />
-        </BaseFormItem>
-        <BaseFormItem label="额度来源账号">
-          <BaseSelect v-model="accountId" :options="accounts" filterable placeholder="选择账号名称或邮箱" :disabled="busy" />
-        </BaseFormItem>
-      </BaseForm>
+          <ZSelect v-model="keyId" :options="keys" filterable placeholder="选择现有 Key" :disabled="busy" />
+        </ZFormItem>
+        <ZFormItem label="额度来源账号">
+          <ZSelect v-model="accountId" :options="accounts" filterable placeholder="选择账号名称或邮箱" :disabled="busy" />
+        </ZFormItem>
+      </ZForm>
       <div v-if="previewBusy || previewError || preview" class="preview-box mt-3">
         <p v-if="previewBusy" role="status" class="muted">
           正在识别周窗口
@@ -699,9 +726,9 @@ onUnmounted(() => clearInterval(timer))
               </span>
             </p>
           </div>
-          <BaseSegmented
+          <ZSegmented
             v-model="detailTab"
-            label="详情分类"
+            aria-label="详情分类"
             :options="detailTabs"
             class="detail-segmented"
           />
@@ -710,7 +737,7 @@ onUnmounted(() => clearInterval(timer))
         <!-- 概览标签 -->
         <div v-show="detailTab === 'overview'" class="tab-pane">
           <div class="grid-2col">
-            <BaseCard title="Key 用量" padding="compact">
+            <ZCard title="Key 用量" padding="compact">
               <div class="metric-group">
                 <span class="metric-label">本周用量</span>
                 <div class="metric-value">
@@ -762,9 +789,9 @@ onUnmounted(() => clearInterval(timer))
                   由宿主独立计算，可能早于账号重置；这不是 Key 失效时间
                 </p>
               </div>
-            </BaseCard>
+            </ZCard>
 
-            <BaseCard title="账号周期与使用率" padding="compact">
+            <ZCard title="账号周期与使用率" padding="compact">
               <div class="metric-group">
                 <span class="metric-label">账号使用情况</span>
                 <div class="metric-value">
@@ -795,19 +822,19 @@ onUnmounted(() => clearInterval(timer))
               <div class="metric-group mt-3">
                 <span class="metric-label">关联状态</span>
                 <div class="mt-1">
-                  <BaseTag :type="tone(link)" size="sm">
+                  <ZTag :type="tagType(tone(link))" size="small">
                     {{ status(link) }}
-                  </BaseTag>
+                  </ZTag>
                 </div>
               </div>
-            </BaseCard>
+            </ZCard>
 
-            <BaseCard title="日限重置卡" padding="compact">
+            <ZCard title="日限重置卡" padding="compact">
               <div class="setting-item-inline">
                 <div class="metric-group">
                   <span class="metric-label">重置卡功能</span>
                   <div class="metric-value mt-1">
-                    <BaseSwitch
+                    <ZSwitch
                       :model-value="!!link.card_enabled"
                       label="日限重置卡开关"
                       :disabled="busy"
@@ -820,9 +847,9 @@ onUnmounted(() => clearInterval(timer))
               <div class="metric-group mt-3">
                 <span class="metric-label">当前卡状态</span>
                 <div class="metric-value mt-1">
-                  <BaseTag :type="cardTone" size="sm">
+                  <ZTag :type="tagType(cardTone)" size="small">
                     {{ cardStatus }}
-                  </BaseTag>
+                  </ZTag>
                 </div>
               </div>
 
@@ -844,21 +871,20 @@ onUnmounted(() => clearInterval(timer))
                 <div class="alert-box alert-danger mb-2">
                   <p>重置结果未知，可由管理员核实后退还卡</p>
                 </div>
-                <BaseCheckbox
+                <ZCheckbox
                   v-model="cardRefundAcknowledge"
-                  show-label
                   label="已核实该 Key 当日用量未被清零"
                   :disabled="busy"
                 />
                 <div class="mt-2">
-                  <BaseButton
-                    size="sm"
-                    variant="destructive"
+                  <ZButton
+                    size="small"
+                    type="danger"
                     :disabled="busy || !cardRefundAcknowledge"
                     @click="refundCard"
                   >
                     退还卡
-                  </BaseButton>
+                  </ZButton>
                 </div>
               </div>
 
@@ -870,21 +896,20 @@ onUnmounted(() => clearInterval(timer))
               </div>
 
               <div v-if="unknownCardNoticesCount > 0" class="card-notice-clear-box mt-3">
-                <BaseCheckbox
+                <ZCheckbox
                   v-model="cardNoticeAcknowledge"
-                  show-label
                   label="已核实这些通知邮件的投递情况，删除记录且不重发"
                   :disabled="busy"
                 />
                 <div class="mt-2">
-                  <BaseButton
-                    size="sm"
-                    variant="destructive"
+                  <ZButton
+                    size="small"
+                    type="danger"
                     :disabled="busy || !cardNoticeAcknowledge"
                     @click="clearUnknownCardNotices"
                   >
                     清理未知通知
-                  </BaseButton>
+                  </ZButton>
                 </div>
               </div>
 
@@ -892,14 +917,14 @@ onUnmounted(() => clearInterval(timer))
                 <span class="metric-label">拼车页地址</span>
                 <div class="carpool-link-row mt-1">
                   <code class="carpool-path">/carpool/</code>
-                  <BaseButton size="sm" :disabled="busy" @click="copyCarpoolUrl">
+                  <ZButton size="small" :disabled="busy" @click="copyCarpoolUrl">
                     {{ copiedCarpool ? '已复制' : '复制' }}
-                  </BaseButton>
+                  </ZButton>
                 </div>
               </div>
-            </BaseCard>
+            </ZCard>
 
-            <BaseCard title="本周期占比" padding="compact">
+            <ZCard title="本周期占比" padding="compact">
               <div v-if="!isShareValid" class="empty-stats">
                 <p class="muted">
                   统计生成中
@@ -947,37 +972,104 @@ onUnmounted(() => clearInterval(timer))
                   </div>
                 </div>
               </template>
-            </BaseCard>
+            </ZCard>
+
+            <ZCard title="账号点数与重置卡" padding="compact" class="account-info-card">
+              <div class="account-info-grid">
+                <div class="metric-group">
+                  <span class="metric-label">额度点数</span>
+                  <div class="metric-value">
+                    {{ formatCredits(currentAccountInfo?.credits) }}
+                  </div>
+                  <p class="muted text-xs mt-1">
+                    获取时间：{{ currentAccountInfo?.credits_at ? displayDate(currentAccountInfo.credits_at, DISPLAY_TIMEZONE, true) : '暂无时间' }}
+                  </p>
+                </div>
+
+                <div class="metric-group">
+                  <span class="metric-label">可用重置卡</span>
+                  <div class="metric-value">
+                    <ZTag v-if="currentAccountInfo?.reset_cards" size="small" type="success">
+                      {{ formatResetCardsAvailable(currentAccountInfo.reset_cards.available_count) }}
+                    </ZTag>
+                    <span v-else class="muted text-xs">
+                      获取中
+                    </span>
+                  </div>
+                  <p class="muted text-xs mt-1">
+                    获取时间：{{ currentAccountInfo?.reset_cards_at ? displayDate(currentAccountInfo.reset_cards_at, DISPLAY_TIMEZONE, true) : '暂无时间' }}
+                  </p>
+                </div>
+              </div>
+
+              <div v-if="currentAccountInfo?.reset_cards_failed_at" class="alert-box alert-warning mt-3">
+                <p>{{ formatResetCardsFailedHint(currentAccountInfo.reset_cards_failed_at, currentAccountInfo.reset_cards_at) }}</p>
+              </div>
+
+              <div class="reset-cards-section mt-3">
+                <span class="metric-label">重置卡列表</span>
+                <div v-if="!currentAccountInfo?.reset_cards" class="muted text-xs mt-2" role="status">
+                  {{ currentAccountInfo?.reset_cards_failed_at ? '获取失败，稍后自动重试' : '获取中...' }}
+                </div>
+                <div v-else-if="!currentAccountInfo.reset_cards.cards || currentAccountInfo.reset_cards.cards.length === 0" class="muted text-xs mt-2">
+                  暂无重置卡
+                </div>
+                <ul v-else class="reset-card-list mt-2">
+                  <li
+                    v-for="(c, idx) in sortResetCards(currentAccountInfo.reset_cards.cards)"
+                    :key="idx"
+                    class="reset-card-item"
+                  >
+                    <div class="reset-card-info">
+                      <div class="reset-card-header">
+                        <span class="reset-card-title">{{ formatResetCardTitle(c.title) }}</span>
+                        <div class="reset-card-tags">
+                          <ZTag v-if="c.reset_type" size="small" type="default">
+                            {{ formatResetCardType(c.reset_type) }}
+                          </ZTag>
+                          <ZTag size="small" :type="resetCardStatusTone(c.status)">
+                            {{ formatResetCardStatus(c.status) }}
+                          </ZTag>
+                        </div>
+                      </div>
+                      <p class="reset-card-expiry">
+                        {{ c.expires_at ? `${displayDate(c.expires_at, DISPLAY_TIMEZONE, true)} 到期` : '无到期时间' }}
+                      </p>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </ZCard>
           </div>
         </div>
 
         <!-- 通知与测试标签 -->
         <div v-show="detailTab === 'notify_test'" class="tab-pane">
-          <BaseCard title="重置后通知" padding="compact" class="mb-4">
-            <BaseFormItem label="收件邮箱">
+          <ZCard title="重置后通知" padding="compact" class="mb-4">
+            <ZFormItem label="收件邮箱">
               <div class="input-with-button">
-                <BaseInput v-model="draftRecipient" type="email" :disabled="busy" />
-                <BaseButton :disabled="busy" @click="act('recipient', { recipient: draftRecipient }, false)">
+                <ZInput v-model="draftRecipient" type="email" :disabled="busy" />
+                <ZButton :disabled="busy" @click="act('recipient', { recipient: draftRecipient }, false)">
                   保存邮箱
-                </BaseButton>
+                </ZButton>
               </div>
               <p class="muted">
                 只影响后续重置；已排队邮件使用重置时的收件地址
               </p>
-            </BaseFormItem>
-          </BaseCard>
+            </ZFormItem>
+          </ZCard>
 
-          <BaseCard title="手动测试" padding="compact" class="mb-4">
+          <ZCard title="手动测试" padding="compact" class="mb-4">
             <p class="muted">
               立即使用已保存的配置发送，不清零额度；自动开关关闭或关联暂停时也可测试
             </p>
             <div class="tools mt-2">
-              <BaseButton :disabled="busy" @click="confirmManual(true)">
+              <ZButton :disabled="busy" @click="confirmManual(true)">
                 发送测试消息
-              </BaseButton>
-              <BaseButton :disabled="busy || !smtpReady || !link.recipient || draftRecipient.trim() !== link.recipient" @click="confirmManual(false)">
+              </ZButton>
+              <ZButton :disabled="busy || !smtpReady || !link.recipient || draftRecipient.trim() !== link.recipient" @click="confirmManual(false)">
                 发送测试邮件
-              </BaseButton>
+              </ZButton>
             </div>
             <p v-if="!smtpReady" class="muted">
               请先在设置中保存 SMTP 服务器、端口和发件地址
@@ -994,11 +1086,11 @@ onUnmounted(() => clearInterval(timer))
             <p v-if="link.last_manual_mail" role="status">
               最近手动邮件：{{ date(link.last_manual_mail.at) }} · {{ link.last_manual_mail.recipient }} · {{ link.last_manual_mail.status === 'succeeded' ? '已确认成功' : '未确认成功，可能已发送，不自动重试' }}
             </p>
-          </BaseCard>
+          </ZCard>
 
-          <BaseCard title="重置后发送记录" padding="compact">
+          <ZCard title="重置后发送记录" padding="compact">
             <div v-if="hasRetryableDeliveries" class="mb-3">
-              <BaseCheckbox v-model="acknowledge" show-label label="我了解重试可能产生重复请求或重复邮件" />
+              <ZCheckbox v-model="acknowledge" label="我了解重试可能产生重复请求或重复邮件" />
             </div>
             <div v-if="link.deliveries && link.deliveries.length" class="deliveries-list">
               <div v-for="job in [...link.deliveries].reverse()" :key="job.id" class="delivery-row">
@@ -1010,24 +1102,24 @@ onUnmounted(() => clearInterval(timer))
                   <span>邮件：{{ sendLabel(job.mail) }}</span>
                 </div>
                 <div v-if="['unknown', 'failed'].includes(job.probe) || ['unknown', 'failed'].includes(job.mail)" class="delivery-actions">
-                  <BaseButton v-if="['unknown', 'failed'].includes(job.probe)" size="sm" :disabled="busy || !acknowledge" @click="act('retry_probe', { delivery_id: job.id }, false)">
+                  <ZButton v-if="['unknown', 'failed'].includes(job.probe)" size="small" :disabled="busy || !acknowledge" @click="act('retry_probe', { delivery_id: job.id }, false)">
                     重试测试
-                  </BaseButton>
-                  <BaseButton v-if="['unknown', 'failed'].includes(job.mail)" size="sm" :disabled="busy || !acknowledge" @click="act('retry_mail', { delivery_id: job.id }, false)">
+                  </ZButton>
+                  <ZButton v-if="['unknown', 'failed'].includes(job.mail)" size="small" :disabled="busy || !acknowledge" @click="act('retry_mail', { delivery_id: job.id }, false)">
                     重试邮件
-                  </BaseButton>
+                  </ZButton>
                 </div>
               </div>
             </div>
             <p v-else class="muted">
               暂无发送记录
             </p>
-          </BaseCard>
+          </ZCard>
         </div>
 
         <!-- 记录与诊断标签 -->
         <div v-show="detailTab === 'audit_diag'" class="tab-pane">
-          <BaseCard title="最近事件" padding="compact" class="mb-4">
+          <ZCard title="最近事件" padding="compact" class="mb-4">
             <div v-if="link.events && link.events.length" class="events-list">
               <p v-for="(event, index) in [...link.events].reverse()" :key="index" class="muted">
                 {{ date(event.at) }} · {{ event.reason }}
@@ -1036,9 +1128,9 @@ onUnmounted(() => clearInterval(timer))
             <p v-else class="muted">
               暂无事件记录
             </p>
-          </BaseCard>
+          </ZCard>
 
-          <BaseCard title="判定与诊断" padding="compact">
+          <ZCard title="判定与诊断" padding="compact">
             <dl class="diag-dl">
               <dt>窗口规则</dt>
               <dd>窗口 codex:604800s · 604800 秒</dd>
@@ -1065,7 +1157,7 @@ onUnmounted(() => clearInterval(timer))
                 </dd>
               </template>
             </dl>
-          </BaseCard>
+          </ZCard>
         </div>
       </div>
     </template>
@@ -1081,7 +1173,7 @@ onUnmounted(() => clearInterval(timer))
       <p class="muted">
         本操作不清零额度；结果未知时不会自动重试，再次发送可能重复计费或投递
       </p>
-      <BaseCheckbox v-model="manualAcknowledge" show-label label="确认立即发送，并了解重复发送的风险" :disabled="busy" />
+      <ZCheckbox v-model="manualAcknowledge" label="确认立即发送，并了解重复发送的风险" :disabled="busy" />
     </template>
 
     <!-- 处理关联弹窗 -->
@@ -1101,7 +1193,7 @@ onUnmounted(() => clearInterval(timer))
               保留现有用量并跳过会重新建立基线
             </p>
           </div>
-          <BaseCheckbox v-model="acknowledge" show-label label="我了解可能清掉期间新产生的消费" :disabled="busy" />
+          <ZCheckbox v-model="acknowledge" label="我了解可能清掉期间新产生的消费" :disabled="busy" />
         </template>
 
         <template v-else-if="link.pending?.kind === 'changed'">
@@ -1146,83 +1238,83 @@ onUnmounted(() => clearInterval(timer))
     <!-- 删除关联弹窗 -->
     <template v-else-if="modal === 'delete'">
       <p>仅删除本插件的关联记录，不撤销已执行的重置</p>
-      <BaseCheckbox v-model="acknowledge" show-label label="确认删除此关联" :disabled="busy" />
+      <ZCheckbox v-model="acknowledge" label="确认删除此关联" :disabled="busy" />
     </template>
 
     <template #footer>
       <!-- 添加关联 footer -->
       <template v-if="modal === 'add'">
         <span class="muted mr-auto">仅建立基线，不清零</span>
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           取消
-        </BaseButton>
-        <BaseButton variant="primary" :loading="busy" :disabled="!keyId || !preview || previewBusy" @click="act('add', { key_id: keyId, account_id: accountId })">
+        </ZButton>
+        <ZButton type="primary" :loading="busy" :disabled="!keyId || !preview || previewBusy" @click="act('add', { key_id: keyId, account_id: accountId })">
           添加
-        </BaseButton>
+        </ZButton>
       </template>
 
       <!-- 详情弹窗 footer: 暂停/恢复 与 删除 在左侧，关闭在右侧 -->
       <template v-else-if="modal === 'detail' && link">
         <div class="modal-footer-left">
-          <BaseButton :disabled="busy" @click="act(link.paused ? 'resume' : 'pause')">
+          <ZButton :disabled="busy" @click="act(link.paused ? 'resume' : 'pause')">
             {{ link.paused ? '恢复并建立新基线' : '暂停关联' }}
-          </BaseButton>
-          <BaseButton variant="destructive" :disabled="busy" @click="modal = 'delete'; acknowledge = false">
+          </ZButton>
+          <ZButton type="danger" :disabled="busy" @click="modal = 'delete'; acknowledge = false">
             删除关联
-          </BaseButton>
+          </ZButton>
         </div>
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           关闭
-        </BaseButton>
+        </ZButton>
       </template>
 
       <!-- 手动测试确认 footer -->
       <template v-else-if="['manual_probe', 'manual_mail'].includes(modal)">
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           取消
-        </BaseButton>
-        <BaseButton variant="primary" :loading="busy" :disabled="!manualAcknowledge || busy" @click="sendManual">
+        </ZButton>
+        <ZButton type="primary" :loading="busy" :disabled="!manualAcknowledge || busy" @click="sendManual">
           确认发送
-        </BaseButton>
+        </ZButton>
       </template>
 
       <!-- 处理关联 footer -->
       <template v-else-if="modal === 'process'">
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           取消
-        </BaseButton>
+        </ZButton>
         <template v-if="link?.pending">
-          <BaseButton :disabled="busy" @click="act('skip')">
+          <ZButton :disabled="busy" @click="act('skip')">
             {{ link.pending.kind === 'unknown' ? '保留现有用量并跳过' : '忽略并更新基线' }}
-          </BaseButton>
-          <BaseButton v-if="link.pending.kind === 'unknown'" variant="destructive" :disabled="!acknowledge || busy" @click="act('retry')">
+          </ZButton>
+          <ZButton v-if="link.pending.kind === 'unknown'" type="danger" :disabled="!acknowledge || busy" @click="act('retry')">
             再清零一次
-          </BaseButton>
-          <BaseButton v-if="['confirm', 'changed'].includes(link.pending.kind)" variant="primary" :loading="busy" @click="act('confirm')">
+          </ZButton>
+          <ZButton v-if="['confirm', 'changed'].includes(link.pending.kind)" type="primary" :loading="busy" @click="act('confirm')">
             确认并清零
-          </BaseButton>
+          </ZButton>
         </template>
-        <BaseButton v-else :loading="busy" @click="act('check')">
+        <ZButton v-else :loading="busy" @click="act('check')">
           立即检查
-        </BaseButton>
+        </ZButton>
       </template>
 
       <!-- 删除关联 footer -->
       <template v-else-if="modal === 'delete'">
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           取消
-        </BaseButton>
-        <BaseButton variant="destructive" :disabled="!acknowledge || busy" @click="act('delete')">
+        </ZButton>
+        <ZButton type="danger" :disabled="!acknowledge || busy" @click="act('delete')">
           删除关联
-        </BaseButton>
+        </ZButton>
       </template>
 
       <!-- 通用 fallback footer -->
       <template v-else>
-        <BaseButton :disabled="busy" @click="modal = ''">
+        <ZButton :disabled="busy" @click="modal = ''">
           关闭
-        </BaseButton>
+        </ZButton>
       </template>
     </template>
-  </BaseModal>
+  </ZDialog>
 </template>

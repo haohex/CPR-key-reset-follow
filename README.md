@@ -2,13 +2,15 @@
 
 > **来源说明**：本仓库是基于 [Ming-321/CPR-key-reset-follow](https://github.com/Ming-321/CPR-key-reset-follow) 的二次修改版本，由 [haohex](https://github.com/haohex) 维护，非原作者发布。原作者实现了周额度跟随与安全清零的核心逻辑，版权与 Apache-2.0 许可归原作者所有；本仓库的修改同样以 Apache-2.0 发布。
 >
-> 主要修改：拼车成员页与日限重置卡；日、周用量同步清零；适配 CPR 3.34；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
+> 主要修改：拼车成员页与日限重置卡；日、周用量同步清零；适配 CPR 3.35；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
 
 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 的独立插件，适合固定使用某个 Codex 账号的 Key。关联后，插件会跟随账号的周额度窗口，同时重置 Key 的今日用量和本周用量，减少管理员逐个手动重置的维护负担。
 
 一个账号可以关联多个 Key，各 Key 独立计费。正常换周自动处理；上游提前重置或使用重置卡后，也可自动跟随，或由管理员手动确认。
 
-拼车成员可打开 `https://你的网关域名/carpool/`，输入自己的 Key 查看本周期用量、同车花费占比（他人名称打码、不显示金额），并使用每个账号周期发放一张的日限重置卡清零当日用量。
+拼车成员可打开 `https://你的网关域名/carpool/`，输入自己的 Key 查看本周期用量、同车花费占比（他人名称打码、不显示金额），并使用每个账号周期发放一张的日限重置卡清零当日用量；成员页和管理页同时只读展示关联账号的额度点数与上游重置卡（维护任务缓存，有人查看时才每 10 分钟查询一次上游）。
+
+![拼车成员页：本人用量、日限重置卡、账号点数与重置卡、同车占比](docs/screenshots/carpool.png)
 
 ![关联列表：Key 用量、账号使用情况及预计重置时间](docs/screenshots/list.png)
 
@@ -16,7 +18,7 @@
 
 ## 安装
 
-要求 **官方 Codex Proxy RS ≥3.34.0 且 <3.35.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.34.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
+要求 **官方 Codex Proxy RS ≥3.35.0 且 <3.36.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.35.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
 
 以下为首次安装步骤：
 
@@ -81,7 +83,7 @@
 
 ## 更多
 
-[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png) · [详情概览](docs/screenshots/daily-detail.png) · [记录与诊断](docs/screenshots/detail-audit.png)
+[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png) · [详情概览](docs/screenshots/daily-detail.png) · [记录与诊断](docs/screenshots/detail-audit.png) · [账号点数与重置卡](docs/screenshots/account-info.png) · [成员页深色](docs/screenshots/carpool-dark.png) · [成员页窄屏](docs/screenshots/carpool-narrow.png)
 
 截图均来自当前构建的合成桥接预览，使用合成数据和官方 UI 主题；[通知与测试](docs/screenshots/notifications-detail.png)、[记录与诊断](docs/screenshots/detail-audit.png)为详情弹窗的另外两个标签页。手动测试的[发送确认](docs/screenshots/manual-test-confirm.png)仍为改版前截图。截图不代表真实宿主、模型或 SMTP 联调通过。
 

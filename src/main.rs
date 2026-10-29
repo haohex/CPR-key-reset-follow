@@ -12,6 +12,7 @@ use gateway_plugin_sdk::{
     },
 };
 use key_reset_follow::{
+    account_info::AccountInfoCache,
     engine::Engine,
     host::{Host, SdkHost, fault},
     stats::ShareCache,
@@ -108,9 +109,11 @@ fn registration() -> ManagementRegistration {
 async fn handle(
     call: TypedCall<ManagementRequest>,
     shares: &ShareCache,
+    account_info: &AccountInfoCache,
 ) -> Result<Value, PluginFault> {
     let host = SdkHost(call.host);
     let mut engine = Engine::load(&host).await?;
+    account_info.sync_accounts(&engine.state);
     if call.request.method == "POST" {
         let cmd: Command =
             serde_json::from_slice(&call.payload).map_err(|_| fault("请求格式不正确"))?;
@@ -207,8 +210,10 @@ async fn handle(
             }
             action => engine.action(key, action, cmd.acknowledge, now()).await?,
         }
+        account_info.sync_accounts(&engine.state);
         return Ok(json!({"ok": true}));
     }
+    account_info.mark_all_viewed(now());
     let mut keys = vec![];
     let mut cursor = None;
     loop {
@@ -262,7 +267,7 @@ async fn handle(
     let smtp_password_configured = !engine.state.smtp.password.is_empty();
     let state = public_state(&engine.state);
     Ok(
-        json!({"version": engine.version, "state": state, "smtp_password_configured": smtp_password_configured, "keys": keys, "accounts": accounts, "budgets": budgets, "shares":shares.snapshot()}),
+        json!({"version": engine.version, "state": state, "smtp_password_configured": smtp_password_configured, "keys": keys, "accounts": accounts, "budgets": budgets, "shares":shares.snapshot(), "account_info":account_info.snapshot()}),
     )
 }
 #[tokio::main]
@@ -273,15 +278,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resources = Arc::new(carpool::Resources::load());
     let limiter = Arc::new(carpool::Limiter::default());
     let shares = Arc::new(ShareCache::default());
+    let account_info = Arc::new(AccountInfoCache::default());
     let management_shares = shares.clone();
     let member_shares = shares.clone();
+    let management_info = account_info.clone();
+    let member_info = account_info.clone();
     let plugin = PluginBuilder::from_json(include_bytes!("../plugin.json"))?
         .management(registration(), move |call| {
             let lock = management_lock.clone();
             let shares = management_shares.clone();
+            let account_info = management_info.clone();
             async move {
                 let _guard = lock.lock().await;
-                let (status, body) = match handle(call, &shares).await {
+                let (status, body) = match handle(call, &shares, &account_info).await {
                     Ok(v) => (200, v),
                     Err(e) => (400, json!({"error": e.message})),
                 };
@@ -304,11 +313,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resources = resources.clone();
             let limiter = limiter.clone();
             let shares = member_shares.clone();
-            Box::pin(async move { Ok(carpool::run(call, lock, resources, limiter, shares).await) })
+            let account_info = member_info.clone();
+            Box::pin(async move {
+                Ok(carpool::run(call, lock, resources, limiter, shares, account_info).await)
+            })
         })?
         .on(methods::RECONCILE, move |call| {
             let lock = lock.clone();
             let shares = shares.clone();
+            let account_info = account_info.clone();
             async move {
                 let guard = lock.lock().await;
                 let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(25);
@@ -339,10 +352,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 })
                 .await
                 .map_err(|_| fault("维护达到时间上限，未完成发送保持未知结果"))??;
+                account_info.sync_accounts(&state);
                 drop(guard);
                 let stats_deadline =
                     deadline.min(tokio::time::Instant::now() + std::time::Duration::from_secs(2));
                 shares.refresh(&host, &state, now(), stats_deadline).await;
+                account_info.refresh(&host, now(), deadline).await;
                 Ok(TypedReply::new(Empty {}))
             }
         })?

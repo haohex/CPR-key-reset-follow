@@ -39,7 +39,7 @@ jobs:
         run: |
           git init /tmp/cpr-sdk
           git -C /tmp/cpr-sdk remote add origin https://github.com/zyycn/codex-proxy-rs.git
-          git -C /tmp/cpr-sdk fetch --depth 1 origin 47d30474af7c3e1fab433f2d4a70430fae548ff2
+          git -C /tmp/cpr-sdk fetch --depth 1 origin 80f7d53085f5c9552e7e74b796a0bec50586ee1b
           git -C /tmp/cpr-sdk checkout --detach FETCH_HEAD
           cargo build --manifest-path /tmp/cpr-sdk/backend/Cargo.toml -p codex-proxy-plugin-cli --locked
       - run: /tmp/cpr-sdk/backend/target/debug/cpr-plugin package --manifest plugin.json --binary target/release/key-reset-follow --target ${{ matrix.target }} --resource-map web=frontend/dist --output-dir dist
