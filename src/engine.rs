@@ -14,11 +14,17 @@ pub struct Engine<'a, H> {
 impl<'a, H: Host> Engine<'a, H> {
     pub async fn load(host: &'a H) -> Result<Self, PluginFault> {
         let (state, version) = host.load().await?;
-        Ok(Self {
+        let mut engine = Self {
             host,
             state,
             version,
-        })
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        engine.recover_cards(now).await?;
+        Ok(engine)
     }
     pub async fn save(&mut self) -> Result<(), PluginFault> {
         self.version = Some(self.host.save(&self.state, self.version).await?);
@@ -58,6 +64,10 @@ impl<'a, H: Host> Engine<'a, H> {
                 events: Default::default(),
                 retry_at: 0,
                 phase,
+                card_enabled: false,
+                cycle_seq: 0,
+                card: None,
+                card_notices: vec![],
             },
         );
         self.state
@@ -233,7 +243,11 @@ impl<'a, H: Host> Engine<'a, H> {
             }
         };
         // 未完成意图就是未知结果，重启无需猜测调用是否曾发送。
-        self.state.links.get_mut(key).unwrap().pending = Some(Pending::Unknown {
+        let link = self.state.links.get_mut(key).unwrap();
+        if reason != "人工再次清零" && reason != "手动确认窗口变化" {
+            crate::card::advance(link, now)?;
+        }
+        link.pending = Some(Pending::Unknown {
             sample: sample.clone(),
             reason: reason.clone(),
             before,
@@ -379,7 +393,7 @@ impl<'a, H: Host> Engine<'a, H> {
                     .map(|i| (key.clone(), i, l.account_id.clone()))
             });
         let Some((key, i, account)) = next else {
-            return Ok(());
+            return self.deliver_card_one().await;
         };
         if !self.state.probe_enabled
             && self.state.links[&key].deliveries[i].probe == SendStatus::Queued
@@ -412,14 +426,7 @@ impl<'a, H: Host> Engine<'a, H> {
                     .key_name(&key)
                     .await
                     .unwrap_or_else(|_| "关联 Key".into());
-                let reset_time =
-                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(job.reset_at)
-                        .and_then(|t| {
-                            chrono::FixedOffset::east_opt(8 * 3600)
-                                .map(|offset| t.with_timezone(&offset))
-                        })
-                        .map(|t| t.format("%Y-%m-%d %H:%M:%S UTC+8").to_string())
-                        .unwrap_or_else(|| "时间不可用".into());
+                let reset_time = format_time(job.reset_at);
                 let body = format!(
                     "Key：{name}\n日额度和周额度已同步重置\n重置时间：{reset_time}\n模型测试：{}\n",
                     job.probe.label()
@@ -442,6 +449,72 @@ impl<'a, H: Host> Engine<'a, H> {
                 d.probe = SendStatus::Succeeded;
             } else {
                 d.mail = SendStatus::Succeeded;
+            }
+        }
+        self.save().await
+    }
+    async fn deliver_card_one(&mut self) -> Result<(), PluginFault> {
+        if !self.state.smtp.enabled {
+            return Ok(());
+        }
+        let next = self
+            .state
+            .links
+            .iter()
+            .filter(|(_, link)| !link.paused)
+            .find_map(|(key, link)| {
+                link.card_notices
+                    .iter()
+                    .position(|job| job.status == SendStatus::Queued)
+                    .map(|index| (key.clone(), index))
+            });
+        let Some((key, index)) = next else {
+            return Ok(());
+        };
+        let link = self.state.links.get_mut(&key).unwrap();
+        let job = &mut link.card_notices[index];
+        job.status = SendStatus::Unknown;
+        let job = job.clone();
+        if let Some(card) = &mut link.card
+            && card.seq == job.seq
+            && card.used_at == Some(job.used_at)
+        {
+            card.mail = Some(SendStatus::Unknown);
+        }
+        self.save().await?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            let name = self
+                .host
+                .key_name(&key)
+                .await
+                .unwrap_or_else(|_| "关联 Key".into());
+            let result = if job.result == crate::model::CardStatus::Used {
+                "已使用，日用量已清零"
+            } else {
+                "结果未知，请联系管理员核实"
+            };
+            let body = format!(
+                "Key：{name}\n使用时间：{}\n结果：{result}\n",
+                format_time(job.used_at)
+            );
+            self.host
+                .email(
+                    &self.state.smtp,
+                    &job.recipient,
+                    "CPR Key 日限重置卡已使用",
+                    &body,
+                )
+                .await
+        })
+        .await;
+        if matches!(result, Ok(Ok(()))) {
+            let link = self.state.links.get_mut(&key).unwrap();
+            link.card_notices[index].status = SendStatus::Succeeded;
+            if let Some(card) = &mut link.card
+                && card.seq == job.seq
+                && card.used_at == Some(job.used_at)
+            {
+                card.mail = Some(SendStatus::Succeeded);
             }
         }
         self.save().await
@@ -588,6 +661,9 @@ impl<'a, H: Host> Engine<'a, H> {
                 }
                 let fresh = self.fresh(&link.account_id).await?;
                 let l = self.state.links.get_mut(key).unwrap();
+                if action == "skip" && matches!(link.pending, Some(Pending::Confirm { .. })) {
+                    crate::card::advance(l, now)?;
+                }
                 l.baseline = fresh;
                 l.phase = if cycle::floating(&l.baseline) {
                     Phase::default()
@@ -620,6 +696,8 @@ impl<'a, H: Host> Engine<'a, H> {
                     sample: fresh,
                     reason: if action == "retry" {
                         "人工再次清零"
+                    } else if matches!(link.pending, Some(Pending::Changed { .. })) {
+                        "手动确认窗口变化"
                     } else {
                         "手动确认"
                     }
@@ -632,4 +710,13 @@ impl<'a, H: Host> Engine<'a, H> {
         }
         self.save().await
     }
+}
+
+fn format_time(millis: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+        .and_then(|time| {
+            chrono::FixedOffset::east_opt(8 * 3600).map(|offset| time.with_timezone(&offset))
+        })
+        .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC+8").to_string())
+        .unwrap_or_else(|| "时间不可用".into())
 }

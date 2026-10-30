@@ -1,12 +1,16 @@
-# Key 周额度跟随账号重置
+# 拼车一体化管理插件
 
 > **来源说明**：本仓库是基于 [Ming-321/CPR-key-reset-follow](https://github.com/Ming-321/CPR-key-reset-follow) 的二次修改版本，由 [haohex](https://github.com/haohex) 维护，非原作者发布。原作者实现了周额度跟随与安全清零的核心逻辑，版权与 Apache-2.0 许可归原作者所有；本仓库的修改同样以 Apache-2.0 发布。
 >
-> 主要修改：日、周用量同步清零；适配 CPR 3.34；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
+> 主要修改：拼车成员页与日限重置卡；日、周用量同步清零；适配 CPR 3.35；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
 
 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 的独立插件，适合固定使用某个 Codex 账号的 Key。关联后，插件会跟随账号的周额度窗口，同时重置 Key 的今日用量和本周用量，减少管理员逐个手动重置的维护负担。
 
 一个账号可以关联多个 Key，各 Key 独立计费。正常换周自动处理；上游提前重置或使用重置卡后，也可自动跟随，或由管理员手动确认。
+
+拼车成员可打开 `https://你的网关域名/carpool/`，输入自己的 Key 查看本周期用量、同车花费占比（他人名称打码、不显示金额），并使用每个账号周期发放一张的日限重置卡清零当日用量；成员页和管理页同时只读展示关联账号的额度点数与上游重置卡（维护任务缓存，有人查看时才每 10 分钟查询一次上游）。
+
+![拼车成员页：本人用量、日限重置卡、账号点数与重置卡、同车占比](docs/screenshots/carpool.png)
 
 ![关联列表：Key 用量、账号使用情况及预计重置时间](docs/screenshots/list.png)
 
@@ -14,7 +18,7 @@
 
 ## 安装
 
-要求 **官方 Codex Proxy RS ≥3.34.0 且 <3.35.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.34.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
+要求 **官方 Codex Proxy RS ≥3.35.0 且 <3.36.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.35.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
 
 以下为首次安装步骤：
 
@@ -36,6 +40,17 @@
 5. 确认新插件运行正常后，再按需卸载旧插件。卸载会删除旧插件的私有数据，保留停用状态可作为对照。
 
 已安装本插件后，在插件详情点击“检查更新”即可查询最新正式版；预发行版需要固定标签，不会被检查更新发现。页面与邮件时间统一为北京时间 UTC+8。
+
+## ⚠️ 含 HTTP 中间件版本的安装与升级
+
+0.3.0 起插件注册 HTTP 中间件以提供成员页。CPR 为新注册的 HTTP 挂载默认使用"拒绝"失败策略，插件清单无法修改；插件进程不可用时，这会拒绝**所有** API 请求。每次安装或升级到 0.3.0 及以后的版本都必须按顺序操作：
+
+1. 在低峰期安装并切换到新版本
+2. **立即**打开插件详情 → 高级设置，把 HTTP 挂载的失败处理改为 **委托**
+3. 调用一次 API，确认请求正常
+4. 打开 `/carpool/` 确认成员页可用
+
+插件只接管 `/carpool` 与 `/carpool/*`，其他路径第一步就交还宿主。即使失败策略为委托，插件已接手的请求在超时或进程中途退出时仍会失败，宿主不会重放。**紧急处理**：在高级设置关闭 HTTP 挂载，API 不再经过插件，周期重置与发卡照常运行，只有成员页不可用。
 
 ## 使用
 
@@ -68,10 +83,9 @@
 
 ## 更多
 
-[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png) · [今日用量详情](docs/screenshots/daily-detail.png)
+[深色主题](docs/screenshots/dark.png) · [窄屏](docs/screenshots/narrow.png) · [添加关联](docs/screenshots/add.png) · [待确认](docs/screenshots/early.png) · [结果未知](docs/screenshots/unknown.png) · [详情概览](docs/screenshots/daily-detail.png) · [记录与诊断](docs/screenshots/detail-audit.png) · [账号点数与重置卡](docs/screenshots/account-info.png) · [成员页深色](docs/screenshots/carpool-dark.png) · [成员页窄屏](docs/screenshots/carpool-narrow.png)
 
-原有截图来自官方宿主中的实际插件页面，使用合成数据；[设置](docs/screenshots/settings.png)与[今日用量详情](docs/screenshots/daily-detail.png)已替换为当前构建的合成桥接预览。通知功能的[设置](docs/screenshots/notifications-settings.png)、[详情](docs/screenshots/notifications-detail.png)、[深色](docs/screenshots/notifications-dark.png)与[窄屏](docs/screenshots/notifications-narrow.png)截图来自当前构建的合成数据预览，使用公开 UI 的主题变量；不代表真实宿主、模型或 SMTP 联调通过。
-手动测试的[结果详情](docs/screenshots/manual-test-result.png)和[发送确认](docs/screenshots/manual-test-confirm.png)同样来自合成桥接预览，不代表真实外部发送验收
+截图均来自当前构建的合成桥接预览，使用合成数据和官方 UI 主题；[通知与测试](docs/screenshots/notifications-detail.png)、[记录与诊断](docs/screenshots/detail-audit.png)为详情弹窗的另外两个标签页。手动测试的[发送确认](docs/screenshots/manual-test-confirm.png)仍为改版前截图。截图不代表真实宿主、模型或 SMTP 联调通过。
 
 开发、联调和发布见 [贡献指南](CONTRIBUTING.md)，周期判定与恢复规则见 [设计文档](docs/design.md)。
 

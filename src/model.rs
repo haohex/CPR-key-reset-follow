@@ -50,6 +50,95 @@ pub struct Link {
     pub retry_at: i64,
     #[serde(default)]
     pub phase: Phase,
+    /// 日限重置卡开关，旧状态缺失时为关闭
+    #[serde(default)]
+    pub card_enabled: bool,
+    /// 插件确认的账号周期序号，只在 docs/design.md"发卡"列出的事件中加一
+    #[serde(default)]
+    pub cycle_seq: u64,
+    /// 当前或最近一张卡；seq 不等于 cycle_seq 时已作废
+    #[serde(default)]
+    pub card: Option<DailyCard>,
+    /// 用卡邮件独立保存，换周或补卡不会丢失尚未完成的通知
+    #[serde(default)]
+    pub card_notices: Vec<CardNotice>,
+}
+/// 使用中与结果未知都视为已用，不自动重试
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardStatus {
+    Available,
+    Using,
+    Used,
+    Unknown,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DailyCard {
+    pub seq: u64,
+    pub issued_at: i64,
+    pub status: CardStatus,
+    #[serde(default)]
+    pub used_at: Option<i64>,
+    /// 用卡通知；None 表示用卡时 SMTP 未启用或没有收件邮箱，不发送
+    #[serde(default)]
+    pub mail: Option<SendStatus>,
+    #[serde(default)]
+    pub recipient: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CardNotice {
+    pub id: u64,
+    pub seq: u64,
+    pub used_at: i64,
+    pub result: CardStatus,
+    pub status: SendStatus,
+    pub recipient: String,
+}
+/// 维护任务刷新的本周期花费统计，只存内存，不写入私有状态
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ShareStats {
+    pub account_id: String,
+    pub computed_at: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// 管理统计返回的十进制 USD 文本，保持原精度
+    pub account_cost: String,
+    /// Key ID 到本周期花费；未出现在统计中的拼车 Key 视为 0
+    pub keys: BTreeMap<String, String>,
+}
+/// 维护任务刷新的账号点数与重置卡，只存内存、只读展示，不写入私有状态
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub account_id: String,
+    /// 宿主已有观测中的点数；宿主没有点数事实时为 null
+    pub credits: Option<Credits>,
+    pub credits_at: Option<i64>,
+    /// 最近一次成功获取的上游重置卡；从未成功时为 null
+    pub reset_cards: Option<ResetCards>,
+    pub reset_cards_at: Option<i64>,
+    /// 最近一次获取重置卡失败的时间；成功后清空，失败时保留旧的 reset_cards
+    pub reset_cards_failed_at: Option<i64>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    /// 上游十进制文本，原样保留，不转为浮点
+    pub balance: Option<String>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetCards {
+    pub available_count: u64,
+    pub cards: Vec<ResetCard>,
+}
+/// 不含上游卡 ID：插件只读展示，不提供消费入口
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResetCard {
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub reset_type: Option<String>,
+    /// 毫秒时间戳，由页面按北京时间显示
+    pub expires_at: Option<i64>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
