@@ -2,7 +2,7 @@
 
 > **来源说明**：本仓库是基于 [Ming-321/CPR-key-reset-follow](https://github.com/Ming-321/CPR-key-reset-follow) 的二次修改版本，由 [haohex](https://github.com/haohex) 维护，非原作者发布。原作者实现了周额度跟随与安全清零的核心逻辑，版权与 Apache-2.0 许可归原作者所有；本仓库的修改同样以 Apache-2.0 发布。
 >
-> 主要修改：日、周用量同步清零；适配 CPR 3.34；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
+> 主要修改：日、周用量同步清零；适配 CPR 3.41；重置后发送测试消息与 SMTP 邮件提醒；手动发送测试；页面与邮件时间统一为北京时间 UTC+8。插件 ID 自 0.2.0 起改为 `haohex.key-reset-follow`，与原作者的 `ming321.key-reset-follow` 是两个独立插件。问题请在本仓库反馈，不要提交到原作者仓库。
 
 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 的独立插件，适合固定使用某个 Codex 账号的 Key。关联后，插件会跟随账号的周额度窗口，同时重置 Key 的今日用量和本周用量，减少管理员逐个手动重置的维护负担。
 
@@ -14,7 +14,7 @@
 
 ## 安装
 
-要求 **官方 Codex Proxy RS ≥3.34.0 且 <3.35.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.34.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.29.x 请使用 v0.1.4 等先前发布的兼容版本，3.30–3.33 无对应发行包。
+要求 **官方 Codex Proxy RS ≥3.41.0 且 <3.42.0 · Linux x86_64 / ARM64**。SDK 与打包工具固定 v3.41.0（插件 RPC 7）；本版宿主安装与升级测试由使用者完成。CPR 3.34 请使用 v0.2.0；需要拼车功能请使用 v0.3.x；CPR 3.29.x 请使用 v0.1.4。
 
 以下为首次安装步骤：
 
