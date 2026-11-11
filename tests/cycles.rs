@@ -56,13 +56,12 @@ fn manifest_matches_target_contract() {
         ("3.18.3", false),
         ("3.29.2", false),
         ("3.33.0", false),
-        ("3.34.0", false),
-        ("3.40.9", false),
-        ("3.41.0", true),
-        ("3.41.9", true),
-        ("3.41.0-beta.1", false),
-        ("3.42.0", false),
-        ("4.0.0", false),
+        ("3.41.0", false),
+        ("3.45.1", false),
+        ("3.45.2-beta.1", false),
+        ("3.45.2", true),
+        ("3.46.0", true),
+        ("4.0.0", true),
     ] {
         assert_eq!(
             manifest

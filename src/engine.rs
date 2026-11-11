@@ -135,10 +135,7 @@ impl<'a, H: Host> Engine<'a, H> {
             if let Phase::Settling { candidate } = &mut link.phase {
                 // 下一个完整周周期已越过上次结束时间，可独立处理正常换周。
                 if cycle::classify(&link.baseline, &sample) == Decision::Normal {
-                    link.pending = Some(Pending::Ready {
-                        sample: sample.clone(),
-                        reason: "正常换周".into(),
-                    });
+                    natural_rollover(link, &sample, now);
                     continue;
                 }
                 if cycle::floating(&sample) {
@@ -161,17 +158,11 @@ impl<'a, H: Host> Engine<'a, H> {
             let decision = cycle::classify(&link.baseline, &sample);
             match decision {
                 Decision::Same => link.baseline.observed = sample.observed,
-                Decision::Normal | Decision::Early
-                    if decision == Decision::Normal || self.state.early_auto =>
-                {
+                Decision::Normal => natural_rollover(link, &sample, now),
+                Decision::Early if self.state.early_auto => {
                     link.pending = Some(Pending::Ready {
                         sample: sample.clone(),
-                        reason: if decision == Decision::Normal {
-                            "正常换周"
-                        } else {
-                            "提前重置"
-                        }
-                        .into(),
+                        reason: "提前重置".into(),
                     });
                 }
                 Decision::Early | Decision::Unexplained => {
@@ -180,7 +171,7 @@ impl<'a, H: Host> Engine<'a, H> {
                         reason: decision,
                     })
                 }
-                Decision::Stale | Decision::Normal => {}
+                Decision::Stale => {}
             }
         }
         self.save().await?;
@@ -632,4 +623,12 @@ impl<'a, H: Host> Engine<'a, H> {
         }
         self.save().await
     }
+}
+
+/// 正常换周时 Key 的日、周窗口会按宿主规则自行到期清零，插件只更新基线，不调用清零，也不排队测试与邮件。
+/// 新窗口在首次使用前结束时间会随观测时间后移，进入等待周期固定阶段，避免把漂移误判为提前重置。
+fn natural_rollover(link: &mut Link, sample: &cycle::Sample, now: i64) {
+    link.baseline = sample.clone();
+    link.phase = Phase::default();
+    link.event(now, "正常换周，Key 按自身周期重置，插件不清零");
 }

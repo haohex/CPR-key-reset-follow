@@ -205,7 +205,7 @@ onUnmounted(() => clearInterval(timer))
             <h3>提前重置时自动重置额度</h3>
             <p>上游提前重置或者使用重置卡，识别后自动重置额度</p>
             <p class="muted">
-              关闭后需要手动确认；正常换周仍自动处理
+              关闭后需要手动确认；正常换周由 Key 自行重置，插件不清零
             </p>
           </div>
           <BaseSwitch v-model="draftEarly" label="提前重置时自动重置额度" :disabled="busy" />

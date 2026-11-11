@@ -177,10 +177,11 @@ async fn setup(h: &Fake) {
     e.add("key-a", "account-a", 1000000).await.unwrap();
     e.add("key-b", "account-a", 1000000).await.unwrap();
 }
+// 正常换周由 Key 自行清零、插件不调用清零；恢复测试改用提前一小时的提前重置驱动清零流程
 fn next(h: &Fake) {
     let mut s = h.0.lock().unwrap();
     s.time = WEEK + 1000;
-    s.reset_at = WEEK * 2;
+    s.reset_at = WEEK * 2 - 3_600_000;
 }
 #[tokio::test]
 async fn shared_refresh_and_partial_unknown_do_not_repeat_success() {
@@ -490,11 +491,13 @@ async fn prolonged_outage_discards_queued_cycle_before_any_reset() {
         .check("account-a", WEEK * 3)
         .await
         .unwrap();
-    assert_eq!(h.0.lock().unwrap().resets, vec!["key-b", "key-a", "key-b"]);
-    assert_eq!(
-        h.0.lock().unwrap().state.links["key-a"].baseline.reset,
-        WEEK * 4
-    );
+    // 停机后当前周期为正常换周：Key 自行清零，插件只更新基线，不补做旧周期清零
+    assert_eq!(h.0.lock().unwrap().resets, vec!["key-b"]);
+    for key in ["key-a", "key-b"] {
+        let link = &h.0.lock().unwrap().state.links[key];
+        assert_eq!(link.baseline.reset, WEEK * 4);
+        assert!(link.pending.is_none());
+    }
 }
 
 #[tokio::test]
@@ -1177,4 +1180,65 @@ async fn manual_mail_error_and_probe_completion_loss_remain_independent_unknown_
     let s = h.0.lock().unwrap();
     assert_eq!(s.mails.len(), 1);
     assert_eq!(s.probes.len(), 1);
+}
+#[tokio::test]
+async fn natural_rollover_updates_baseline_without_reset_or_delivery() {
+    let h = Fake::new();
+    setup(&h).await;
+    {
+        let mut s = h.0.lock().unwrap();
+        s.state.probe_enabled = true;
+        s.state.smtp.enabled = true;
+        s.state.links.get_mut("key-a").unwrap().recipient = "ops@example.test".into();
+        s.time = WEEK + 1000;
+        s.reset_at = WEEK * 2;
+    }
+    let mut e = Engine::load(&h).await.unwrap();
+    e.check("account-a", WEEK + 1000).await.unwrap();
+    e.deliver_one().await.unwrap();
+    let s = h.0.lock().unwrap();
+    assert!(s.resets.is_empty() && s.probes.is_empty() && s.mails.is_empty());
+    for key in ["key-a", "key-b"] {
+        let link = &s.state.links[key];
+        assert_eq!(link.baseline.reset, WEEK * 2);
+        assert!(link.pending.is_none() && link.deliveries.is_empty());
+        assert_eq!(
+            link.events.back().unwrap().reason,
+            "正常换周，Key 按自身周期重置，插件不清零"
+        );
+    }
+}
+#[tokio::test]
+async fn natural_rollover_window_drift_is_not_treated_as_early_reset() {
+    let h = Fake::new();
+    setup(&h).await;
+    // 新窗口首次使用前结束时间随观测时间后移，不能被误判为提前重置
+    for (i, t) in [WEEK + 1000, WEEK + 400_000, WEEK + 800_000]
+        .into_iter()
+        .enumerate()
+    {
+        {
+            let mut s = h.0.lock().unwrap();
+            s.time = t;
+            s.reset_at = t + WEEK;
+        }
+        Engine::load(&h)
+            .await
+            .unwrap()
+            .check("account-a", t)
+            .await
+            .unwrap();
+        let s = h.0.lock().unwrap();
+        assert!(s.resets.is_empty(), "round {i}");
+        assert!(s.state.links["key-a"].pending.is_none(), "round {i}");
+    }
+    let s = h.0.lock().unwrap();
+    let events = &s.state.links["key-a"].events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.reason == "正常换周，Key 按自身周期重置，插件不清零")
+            .count(),
+        1
+    );
 }
